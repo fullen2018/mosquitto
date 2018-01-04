@@ -37,6 +37,14 @@ void packet__write_bytes(struct mosquitto__packet *packet, const void *bytes, ui
 void packet__write_string(struct mosquitto__packet *packet, const char *str, uint16_t length);
 void packet__write_uint16(struct mosquitto__packet *packet, uint16_t word);
 
+#ifdef WITH_CLUSTER
+int packet__read_int64(struct _mosquitto_packet *packet, int64_t *qword);
+int packet__read_uint32(struct _mosquitto_packet *packet, uint32_t *dword);
+
+void packet__write_int64(struct _mosquitto_packet *packet, int64_t qword);
+void packet__write_uint32(struct _mosquitto_packet *packet, uint32_t dword);
+#endif
+
 int packet__write(struct mosquitto *mosq);
 #ifdef WITH_BROKER
 int packet__read(struct mosquitto_db *db, struct mosquitto *mosq);

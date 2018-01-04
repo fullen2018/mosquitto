@@ -13,10 +13,12 @@ OBJS=	mosquitto.o \
 		conf.o \
 		conf_includedir.o \
 		context.o \
+		cluster.o \
 		database.o \
 		handle_connack.o \
 		handle_connect.o \
 		handle_ping.o \
+		handle_private.o \
 		handle_pubackcomp.o \
 		handle_publish.o \
 		handle_pubrec.o \
@@ -40,6 +42,7 @@ OBJS=	mosquitto.o \
 		send_connect.o \
 		send_disconnect.o \
 		send_mosq.o \
+		send_private.o \
 		send_publish.o \
 		send_suback.o \
 		send_subscribe.o \
@@ -73,6 +76,9 @@ conf_includedir.o : conf_includedir.c mosquitto_broker_internal.h
 context.o : context.c mosquitto_broker_internal.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
+cluster.o : cluster.c mosquitto_broker_internal.h
+	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
+
 database.o : database.c mosquitto_broker_internal.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
@@ -83,6 +89,9 @@ handle_connect.o : handle_connect.c mosquitto_broker_internal.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
 handle_ping.o : ../lib/handle_ping.c ../lib/read_handle.h
+	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
+
+handle_private.o : handle_private.c mosquitto_broker_internal.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
 handle_pubackcomp.o : ../lib/handle_pubackcomp.c ../lib/read_handle.h
@@ -152,6 +161,9 @@ send_connack.o : send_connack.c mosquitto_broker_internal.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
 send_mosq.o : ../lib/send_mosq.c ../lib/send_mosq.h
+	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
+
+send_private.o : ../lib/send_private.c ../lib/send_mosq.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
 send_publish.o : ../lib/send_publish.c ../lib/send_mosq.h

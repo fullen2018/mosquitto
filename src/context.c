@@ -22,6 +22,9 @@ Contributors:
 #include "mosquitto_broker_internal.h"
 #include "memory_mosq.h"
 #include "packet_mosq.h"
+#ifdef WITH_CLUSTER
+#include "send_mosq.h"
+#endif
 #include "time_mosq.h"
 
 #include "uthash.h"
@@ -52,6 +55,18 @@ struct mosquitto *context__init(struct mosquitto_db *db, mosq_sock_t sock)
 	 * done by looking at context->bridge for bridges that we create ourself,
 	 * but incoming bridges need some other way of being recorded. */
 	context->is_bridge = false;
+
+	context->is_node = false;
+	context->is_peer = false;
+	context->save_subs = false;
+	context->is_sys_topic = true;
+	context->is_db_dup_sub = true;
+	context->last_sub_id = 0;
+	context->client_topic_count = 0;
+	context->remote_time_offset = 0;
+	context->last_sub_client_id = NULL;
+	context->db = db;
+	context->client_topics = NULL;
 
 	context->in_packet.payload = NULL;
 	packet__cleanup(&context->in_packet);
@@ -132,6 +147,13 @@ void context__cleanup(struct mosquitto_db *db, struct mosquitto *context, bool d
 			mosquitto__free(context->bridge->remote_password);
 		}
 		context->bridge->remote_password = NULL;
+	}
+#endif
+
+#ifdef WITH_CLUSTER
+	if(context->is_node){
+		log__printf(NULL, MOSQ_LOG_NOTICE, "context__cleanup,client_id:%s.addr:%p,do_free:%s",context->id,context,do_free?"true":"false");
+		node__cleanup(db, context);
 	}
 #endif
 

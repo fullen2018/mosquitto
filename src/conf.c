@@ -30,6 +30,11 @@ Contributors:
 #ifndef WIN32
 #  include <netdb.h>
 #  include <sys/socket.h>
+#ifdef WITH_CLUSTER
+#  include <ifaddrs.h>
+#  include <netinet/in.h>
+#  include <arpa/inet.h>
+#endif
 #else
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
@@ -218,6 +223,10 @@ void config__init(struct mosquitto__config *config)
 	config->bridges = NULL;
 	config->bridge_count = 0;
 #endif
+#ifdef WITH_CLUSTER
+	config->nodes = NULL;
+	config->node_count = 0;
+#endif
 	config->auth_plugins = NULL;
 	config->verbose = false;
 	config->message_size_limit = 0;
@@ -300,6 +309,31 @@ void config__cleanup(struct mosquitto__config *config)
 		mosquitto__free(config->bridges);
 	}
 #endif
+
+#ifdef WITH_CLUSTER
+	if(config->nodes){
+		for(i=0; i<config->node_count; i++){
+			mosquitto__free(config->nodes[i].name);
+			mosquitto__free(config->nodes[i].address);
+			mosquitto__free(config->nodes[i].remote_clientid);
+			mosquitto__free(config->nodes[i].remote_username);
+			mosquitto__free(config->nodes[i].remote_password);
+			mosquitto__free(config->nodes[i].local_clientid);
+			mosquitto__free(config->nodes[i].local_username);
+			mosquitto__free(config->nodes[i].local_password);
+#ifdef WITH_TLS
+			mosquitto__free(config->nodes[i].tls_version);
+			mosquitto__free(config->nodes[i].tls_cafile);
+#ifdef REAL_WITH_TLS_PSK
+			mosquitto__free(config->nodes[i].tls_psk_identity);
+			mosquitto__free(config->nodes[i].tls_psk);
+#endif
+#endif
+		}
+		mosquitto__free(config->nodes);
+	}
+#endif
+
 	if(config->auth_plugins){
 		for(i=0; i<config->auth_plugin_count; i++){
 			plug = &config->auth_plugins[i];
@@ -479,7 +513,7 @@ int config__read(struct mosquitto__config *config, bool reload)
 	struct config_recurse cr;
 	int lineno = 0;
 	int len;
-#ifdef WITH_BRIDGE
+#if defined(WITH_BRIDGE)||defined(WITH_CLUSTER)
 	int i;
 #endif
 
@@ -550,6 +584,25 @@ int config__read(struct mosquitto__config *config, bool reload)
 	}
 #endif
 
+#ifdef WITH_CLUSTER
+	for(i=0; i<config->node_count; i++){
+		if(!config->nodes[i].name){
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Error: Invalid node configuration.");
+			return MOSQ_ERR_INVAL;
+		}
+#ifdef REAL_WITH_TLS_PSK
+		if(config->nodes[i].tls_psk && !config->nodes[i].tls_psk_identity){
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Error: Invalid node configuration: missing node_identity.\n");
+			return MOSQ_ERR_INVAL;
+		}
+		if(config->nodes[i].tls_psk_identity && !config->nodes[i].tls_psk){
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Error: Invalid node configuration: missing node_psk.\n");
+			return MOSQ_ERR_INVAL;
+		}
+#endif
+	}
+#endif
+
 	if(cr.log_dest_set){
 		config->log_dest = cr.log_dest;
 	}
@@ -572,6 +625,12 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 	struct mosquitto__bridge *cur_bridge = NULL;
 	struct mosquitto__bridge_topic *cur_topic;
 #endif
+#ifdef WITH_CLUSTER
+	struct mosquitto__node *cur_node = NULL;
+	int i;
+	char *node_address;
+#endif
+
 	struct mosquitto__auth_plugin_config *cur_auth_plugin = NULL;
 
 	time_t expiration_mult;
@@ -649,6 +708,71 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 					}
 #else
 					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
+#endif
+				}else if(!strcmp(token, "nodeaddress")){
+#ifdef WITH_CLUSTER
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if((token = strtok_r(NULL, " ", &saveptr))){
+						cur_node->address = token;
+						node_address = strtok_r(cur_node->address, ":", &saveptr);
+						if(node_address){
+							token = strtok_r(NULL, ":", &saveptr);
+							if(token){
+								tmp_int = atoi(token);
+								if(tmp_int < 1 || tmp_int > 65535){
+									log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid node port value (%d).", tmp_int);
+									return MOSQ_ERR_INVAL;
+								}
+								cur_node->port = tmp_int;
+							}else{
+								cur_node->port = 1883;
+							}
+							cur_node->address = mosquitto__strdup(node_address);
+							conf__attempt_resolve(node_address, "node address", MOSQ_LOG_WARNING, "Warning");
+						}
+					}else{
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Empty address value in node configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
+#endif
+				}else if(!strcmp(token, "nodename")){
+#ifdef WITH_CLUSTER
+					token = strtok_r(NULL, " ", &saveptr);
+					if(token){
+						/* Check for existing bridge name. */
+						for(i=0; i<config->node_count; i++){
+							if(!strcmp(config->nodes[i].name, token)){
+								log__printf(NULL, MOSQ_LOG_ERR, "Error: Duplicate node name \"%s\".", token);
+								return MOSQ_ERR_INVAL;
+							}
+						}
+						config->node_count++;
+						config->nodes = mosquitto__realloc(config->nodes, config->node_count * sizeof(struct mosquitto__node));
+						if(!config->nodes){
+							log__printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
+							return MOSQ_ERR_NOMEM;
+						}
+						cur_node= &(config->nodes[config->node_count - 1]);
+						memset(cur_node, 0, sizeof(struct mosquitto__node));
+						cur_node->name = mosquitto__strdup(token);
+						if(!cur_node->name){
+							log__printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
+							return MOSQ_ERR_NOMEM;
+						}
+	                    cur_node->keepalive = 10;
+	                    cur_node->protocol_version = mosq_p_mqtt311;
+						cur_node->context = NULL;
+					}else{
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Empty node name in configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
 #endif
 				}else if(!strcmp(token, "allow_anonymous")){
 					if(conf__parse_bool(&token, "allow_anonymous", &config->allow_anonymous, saveptr)) return MOSQ_ERR_INVAL;
@@ -1899,6 +2023,113 @@ static int config__check(struct mosquitto__config *config)
 		}
 	}
 #endif
+
+#ifdef WITH_CLUSTER
+	int i, j;
+	struct mosquitto__node *node1, *node2;
+	char hostname[256];
+	int len;
+
+	struct ifaddrs *itfs = NULL;
+	struct in_addr *tmpAddrPtr = NULL;
+	if(getifaddrs(&itfs)==-1)
+	{
+		log__printf(NULL, MOSQ_LOG_ERR, "Error: can not get local ip address. reason:%s", strerror(errno));
+	}
+
+	/* check and remove local nodes*/
+	while(itfs){
+		if(itfs->ifa_addr->sa_family == AF_INET){
+			tmpAddrPtr = &((struct sockaddr_in *)itfs->ifa_addr)->sin_addr;
+			for(i=0; i<config->node_count; i++){
+				node1 = &config->nodes[i];
+				for(j=0; j<config->listener_count; j++){
+			 		if(config->listeners[j].port == node1->port)
+						break;
+				}
+				if(j == config->listener_count)
+					continue;
+				if(inet_addr(node1->address) == tmpAddrPtr->s_addr){
+					log__printf(NULL, MOSQ_LOG_ERR, "node: %s:%d is local address, ignore.", node1->address, node1->port);
+					mosquitto__free(node1->name);
+					mosquitto__free(node1->address);
+					mosquitto__free(node1->remote_clientid);
+					mosquitto__free(node1->remote_username);
+					mosquitto__free(node1->remote_password);
+					mosquitto__free(node1->local_clientid);
+					mosquitto__free(node1->local_username);
+					mosquitto__free(node1->local_password);
+					config->node_count--;
+					struct mosquitto__node *nodes = mosquitto__malloc(config->node_count * sizeof(struct mosquitto__node));
+					struct mosquitto__node *tmp_ptr = nodes;
+					int k;
+					for(k=0; k<config->node_count+1; k++){
+						if(k!=i){
+							memcpy(tmp_ptr, &config->nodes[k], sizeof(struct mosquitto__node));
+							tmp_ptr++;
+						}
+					}
+					mosquitto__free(config->nodes);
+					config->nodes = nodes;
+				}
+			}
+		}
+		else if(itfs->ifa_addr->sa_family == AF_INET6){/* IPv6 */
+		}
+		itfs = itfs->ifa_next;
+	}
+
+	/* Check for nodes duplicate local_clientid, need to generate missing IDs first. */
+	for(i=0; i<config->node_count; i++){
+		node1 = &config->nodes[i];
+		if(!node1) continue;
+		if(!node1->remote_clientid){
+			if(!gethostname(hostname, 256)){
+				len = strlen(hostname) + 1;
+				node1->remote_clientid = mosquitto__malloc(len);
+				if(!node1->remote_clientid)
+					return MOSQ_ERR_NOMEM;
+				snprintf(node1->remote_clientid, len, "%s", hostname);
+			}else{
+				return 1;
+			}
+		}
+		if(!node1->local_clientid){
+			len = strlen(node1->name) + 1;
+			node1->local_clientid = mosquitto__malloc(len);
+			if(!node1->local_clientid){
+				log__printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
+				return MOSQ_ERR_NOMEM;
+			}
+			snprintf(node1->local_clientid, len, "%s", node1->name);
+		}
+	}
+	
+	for(i=0; i<config->node_count; i++){
+		node1 = &config->nodes[i];
+		if(!node1) continue;
+		for(j=i+1; j<config->node_count; j++){
+			node2 = &config->nodes[j];
+			if(!node2) continue;
+			if(!strcmp(node1->local_clientid, node2->local_clientid)){
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER]Error: node local_clientid "
+												"'%s' is not unique. Try changing or setting the "
+												"local_clientid value for one of the nodes.",
+												node1->local_clientid);
+				return MOSQ_ERR_INVAL;
+			}
+		}
+	}
+
+	log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER]totally %d remote nodes configured:", config->node_count);
+		
+	for(i=0; i<config->node_count; i++){
+		node1 = &config->nodes[i];
+		if(!node1) continue;
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER]Node(%d):%s, ip:%s, port:%d, local_clientid:%s, remote_clientid:%s", i+1, node1->name, node1->address, node1->port,node1->local_clientid,node1->remote_clientid);
+	}
+#endif
+
 	return MOSQ_ERR_SUCCESS;
 }
 

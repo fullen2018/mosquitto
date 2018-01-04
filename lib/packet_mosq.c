@@ -248,6 +248,54 @@ void packet__write_uint16(struct mosquitto__packet *packet, uint16_t word)
 	packet__write_byte(packet, MOSQ_LSB(word));
 }
 
+#ifdef WITH_CLUSTER
+void packet__write_int64(struct mosquitto__packet *packet, int64_t qword)
+{	
+	packet__write_byte(packet, (uint8_t)(qword & 0xFF00000000000000 >> 56));
+	packet__write_byte(packet, (uint8_t)(qword & 0x00FF000000000000 >> 48));
+	packet__write_byte(packet, (uint8_t)(qword & 0x0000FF0000000000 >> 40));
+	packet__write_byte(packet, (uint8_t)(qword & 0x000000FF00000000 >> 32));
+	packet__write_byte(packet, (uint8_t)(qword & 0x00000000FF000000 >> 24));
+	packet__write_byte(packet, (uint8_t)(qword & 0x0000000000FF0000 >> 16));
+	packet__write_byte(packet, (uint8_t)(qword & 0x000000000000FF00 >> 8));
+	packet__write_byte(packet, (uint8_t)(qword & 0x00000000000000FF));
+}
+
+int packet__read_int64(struct mosquitto__packet *packet, int64_t *qword)
+{
+	assert(packet);
+	if(packet->pos+8 > packet->remaining_length) return MOSQ_ERR_PROTOCOL;
+	int i;
+	*qword = 0;
+	for(i=1; i<=8; i++){
+		*qword += (int64_t)((uint8_t)(packet->payload[packet->pos]&0xFF)>>(8*(8-i)));
+		packet->pos++;
+	}
+	return MOSQ_ERR_SUCCESS;
+}
+
+void packet__write_uint32(struct mosquitto__packet *packet, uint32_t dword)
+{
+	packet__write_byte(packet, (uint8_t)(dword & 0xFF000000 >> 24));
+	packet__write_byte(packet, (uint8_t)(dword & 0x00FF0000 >> 16));
+	packet__write_byte(packet, (uint8_t)(dword & 0x0000FF00 >> 8));
+	packet__write_byte(packet, (uint8_t)(dword & 0x000000FF));
+}
+
+int packet__read_uint32(struct mosquitto__packet *packet, uint32_t *dword)
+{
+	assert(packet);
+	if(packet->pos+4 > packet->remaining_length) return MOSQ_ERR_PROTOCOL;
+	int i;
+	*dword = 0;
+	for(i=1; i<=4; i++){
+		*dword += (uint32_t)((uint8_t)(packet->payload[packet->pos]&0xFF)>>(8*(4-i)));
+		packet->pos++;
+	}
+	return MOSQ_ERR_SUCCESS;
+}
+#endif
+
 
 int packet__write(struct mosquitto *mosq)
 {
@@ -372,7 +420,6 @@ int packet__write(struct mosquitto *mosq)
 	pthread_mutex_unlock(&mosq->current_out_packet_mutex);
 	return MOSQ_ERR_SUCCESS;
 }
-
 
 #ifdef WITH_BROKER
 int packet__read(struct mosquitto_db *db, struct mosquitto *mosq)

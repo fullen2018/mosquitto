@@ -34,4 +34,13 @@ int send__pubrel(struct mosquitto *mosq, uint16_t mid);
 int send__subscribe(struct mosquitto *mosq, int *mid, const char *topic, uint8_t topic_qos);
 int send__unsubscribe(struct mosquitto *mosq, int *mid, const char *topic);
 
+#ifdef WITH_CLUSTER
+int send__private_subscribe(struct mosquitto *context, int *mid, const char *topic, uint8_t topic_qos, char *client_id, uint16_t sub_id);
+int send__private_retain(struct mosquitto *context, char *remote_client_id, uint16_t sub_id, const char* topic, uint8_t qos, int mid, int64_t rcv_time, uint32_t payloadlen, const void *payload);
+int send__session_req(struct mosquitto *node, char *client_id, uint8_t clean_session);
+int send__session_resp(struct mosquitto *peer, char *client_id, struct mosquitto *client_context);
+int send__multi_subscribes(struct mosquitto *context, int *mid, char **topic_arr, int topic_arr_len);
+int send__multi_unsubscribe(struct mosquitto *context, int *mid, char **topic_arr, int topic_arr_len);
+#endif
+
 #endif

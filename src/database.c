@@ -115,6 +115,15 @@ int db__open(struct mosquitto__config *config, struct mosquitto_db *db)
 	db->bridges = NULL;
 	db->bridge_count = 0;
 #endif
+#ifdef WITH_CLUSTER
+	db->node_contexts = NULL;
+	db->node_context_count= 0;
+	config->db = db;
+	db->sub_id = 0;
+	db->retain_list = NULL;
+	db->nodes_disconn_times = 0;
+	db->current_nodes = 0;
+#endif
 
 	// Initialize the hashtable
 	db->clientid_index_hash = NULL;
@@ -626,6 +635,10 @@ int db__message_store(struct mosquitto_db *db, const char *source, uint16_t sour
 	temp->topic = topic;
 	topic = NULL;
 	temp->payloadlen = payloadlen;
+#ifdef WITH_CLUSTER
+	temp->from_node = false;
+	temp->rcv_time = mosquitto_time();
+#endif
 	if(payloadlen){
 		UHPA_MOVE(temp->payload, *payload, payloadlen);
 	}else{
@@ -849,6 +862,9 @@ int db__message_write(struct mosquitto_db *db, struct mosquitto *context)
 	uint32_t payloadlen;
 	const void *payload;
 	int msg_count = 0;
+#ifdef WITH_CLUSTER
+	enum mosquitto_msg_state msg_state;
+#endif
 
 	if(!context || context->sock == INVALID_SOCKET
 			|| (context->state == mosq_cs_connected && !context->id)){
@@ -869,7 +885,13 @@ int db__message_write(struct mosquitto_db *db, struct mosquitto *context)
 		qos = tail->qos;
 		payloadlen = tail->store->payloadlen;
 		payload = UHPA_ACCESS_PAYLOAD(tail->store);
-
+#ifdef WITH_CLUSTER
+		if(context->is_peer && tail->direction == mosq_md_out)
+			msg_state = mosq_ms_publish_qos0;
+		else
+			msg_state = tail->state;
+		switch(msg_state)
+#else
 		switch(tail->state){
 			case mosq_ms_publish_qos0:
 				rc = send__publish(context, mid, topic, payloadlen, payload, qos, retain, retries);
@@ -991,4 +1013,209 @@ void db__vacuum(void)
 {
 	/* FIXME - reimplement? */
 }
+
+#ifdef WITH_CLUSTER
+int db__message_insert_into_retain_queue(struct mosquitto_db *db, struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, int qos, bool retain, struct mosquitto_msg_store *stored, uint16_t sub_id)
+{/*send these messages 1 second later*/
+	struct mosquitto_client_msg *msg = NULL, *tmp_msg = NULL;
+	struct mosquitto_client_retain *cr = NULL;
+	log__printf(NULL, MOSQ_LOG_INFO, "save retain msg for client: %s, retain topic: %s", context->id, stored->topic);
+	assert(stored);
+	if(!context) return MOSQ_ERR_INVAL;
+	if(!context->id) return MOSQ_ERR_SUCCESS; /* Protect against unlikely "client is disconnected but not entirely freed" scenario */
+
+	msg = mosquitto__malloc(sizeof(struct mosquitto_client_msg));
+	if(!msg) return MOSQ_ERR_NOMEM;
+	msg->next = NULL;
+	msg->store = stored;
+	msg->mid = mid;
+	msg->timestamp = stored->rcv_time;
+	msg->direction = dir;
+	msg->state = mosq_ms_queued;
+	msg->dup = false;
+	msg->qos = qos;
+	msg->retain = retain;
+
+	cr = db->retain_list;
+	while(cr){
+		if(cr->sub_id == sub_id) break;
+		cr = cr->next;
+	}
+
+	if(!(cr && (cr->sub_id == sub_id))) return MOSQ_ERR_SUCCESS;
+
+	if(!cr->retain_msgs)
+		cr->retain_msgs = msg;
+	else{
+		tmp_msg = cr->retain_msgs;
+		while(tmp_msg->next){
+			tmp_msg = tmp_msg->next;
+		}
+		tmp_msg->next = msg;
+	}
+	msg->store->ref_count++;
+	return MOSQ_ERR_SUCCESS;
+}
+
+int db__message_insert_to_inflight(struct mosquitto_db *db, struct mosquitto *client, struct mosquitto_client_msg *msg)
+{
+	assert(client && msg->retain && msg->direction == mosq_md_out);
+
+	int rc;
+	struct mosquitto_client_msg **msgs, **last_msg;
+
+	if(client->sock == INVALID_SOCKET){/* Client is not connected only queue messages with QoS>0. */
+		if(msg->qos == 0 && !db->config->queue_qos0_messages){
+			return 2;
+		}
+	}
+
+	if(client->sock != INVALID_SOCKET){
+		if(db__ready_for_flight(client, msg->qos)){
+			switch(msg->qos){
+				case 0:
+					msg->state = mosq_ms_publish_qos0;
+					break;
+				case 1:
+					msg->state = mosq_ms_publish_qos1;
+					break;
+				case 2:
+					msg->state = mosq_ms_publish_qos2;
+					break;
+			}
+		}else if(db__ready_for_queue(client, msg->qos)){
+			msg->state = mosq_ms_queued;
+			rc = 2;
+		}else{/* Dropping message due to full queue. */
+			if(client->is_dropping == false){
+				client->is_dropping = true;
+				log__printf(NULL, MOSQ_LOG_NOTICE,
+									"[CLUSTER] Outgoing Retain messages are being dropped for client %s.",
+									client->id);
+			}
+			return 2;
+		}
+	}else{
+		if(db__ready_for_queue(client, msg->qos)){
+			msg->state = mosq_ms_queued;
+		}else{
+			if(client->is_dropping == false){
+				client->is_dropping = true;
+				log__printf(NULL, MOSQ_LOG_NOTICE,
+									"[CLUSTER] Outgoing Retain messages are being dropped for client %s.",
+									client->id);
+			}
+			return 2;
+		}
+	}
+	assert(msg->state != mosq_ms_invalid);
+
+	if (msg->state == mosq_ms_queued){
+		msgs = &(client->queued_msgs);
+		last_msg = &(client->last_queued_msg);
+	}else{
+		msgs = &(client->inflight_msgs);
+		last_msg = &(client->last_inflight_msg);
+	}
+
+	if(*last_msg){
+		(*last_msg)->next = msg;
+		(*last_msg) = msg;
+	}else{
+		*msgs = msg;
+		*last_msg = msg;
+	}
+	client->msg_count++;
+	client->msg_bytes += msg->store->payloadlen;
+	if(msg->qos > 0){
+		client->msg_count12++;
+		client->msg_bytes12 += msg->store->payloadlen;
+	}
+
+#ifdef WITH_WEBSOCKETS
+	if(client->wsi && rc == 0){
+		return db__message_write(db, client);
+	}else{
+		return rc;
+	}
+#else
+	return rc;
+#endif
+}
+
+int db__message_session_pub_insert(struct mosquitto_db *db, struct mosquitto *client_context, uint16_t pub_mid, enum mosquitto_msg_state pub_state, enum mosquitto_msg_direction pub_dir, uint8_t pub_dup, uint8_t pub_qos, bool retain, struct mosquitto_msg_store *stored)
+{
+	int rc = 0;
+	struct mosquitto_client_msg *msg;
+	struct mosquitto_client_msg **msgs, **last_msg;
+
+	if(client_context->sock != INVALID_SOCKET){
+		if(!db__ready_for_flight(client_context, pub_qos)){
+			if(db__ready_for_queue(client_context, pub_qos)){
+				pub_state = mosq_ms_queued;
+				rc = 2;
+			}else{
+				if(client_context->is_dropping == false){
+					client_context->is_dropping = true;
+					log__printf(NULL, MOSQ_LOG_NOTICE, "[CLUSTER] Outgoing messages from session response are being dropped for client %s.", client_context->id);
+				}
+				return MOSQ_ERR_NOMEM;
+			}
+		}
+	}else{/*INVALID socket*/
+		if(db__ready_for_queue(client_context, pub_qos)){
+			pub_state = mosq_ms_queued;
+		}else{
+			if(client_context->is_dropping == false){
+				client_context->is_dropping = true;
+				log__printf(NULL, MOSQ_LOG_NOTICE, "[CLUSTER] Outgoing messages from session response are being dropped for client %s.", client_context->id);
+			}
+			return MOSQ_ERR_NOMEM;
+		}
+	}
+
+	msg = mosquitto__malloc(sizeof(struct mosquitto_client_msg));
+	if(!msg){
+		return MOSQ_ERR_NOMEM;
+	}
+	msg->next = NULL;
+	msg->store = stored;
+	msg->store->ref_count++;
+	msg->mid = pub_mid;
+	msg->timestamp = mosquitto_time();
+	msg->direction = pub_dir;
+	msg->state = pub_state;
+	msg->dup = pub_dup;
+	msg->qos = pub_qos;
+	msg->retain = false; /* retain msgs would handle by another procedure */
+
+	if(msg->state == mosq_ms_queued){
+		msgs = &(client_context->queued_msgs);
+		last_msg = &(client_context->last_queued_msg);
+	}else{
+		msgs = &(client_context->inflight_msgs);
+		last_msg = &(client_context->last_inflight_msg);
+	}
+
+	if(*last_msg){
+		(*last_msg)->next = msg;
+        (*last_msg) = msg;
+	}else{
+		*msgs = msg;
+        *last_msg = msg;
+	}
+	client_context->msg_count++;
+	client_context->msg_bytes += msg->store->payloadlen;
+
+#ifdef WITH_WEBSOCKETS
+	if(client_context->wsi && rc == 0){
+		return db__message_write(db, client_context);
+	}else{
+		return rc;
+	}
+#else
+	return rc;
+#endif
+}
+#endif
 

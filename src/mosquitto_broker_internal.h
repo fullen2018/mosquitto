@@ -621,6 +621,29 @@ struct lws_context *mosq_websockets_init(struct mosquitto__listener *listener, i
 struct libwebsocket_context *mosq_websockets_init(struct mosquitto__listener *listener, int log_level);
 #  endif
 #endif
+
+/* ============================================================
+ * Cluster related functions
+ * ============================================================ */
+ #ifdef WITH_CLUSTER
+void node__disconnect(struct mosquitto_db *db, struct mosquitto *context);
+int node__new(struct mosquitto_db *db, struct mosquitto__node *node);
+void node__cleanup(struct mosquitto_db *db, struct mosquitto *context);
+void node__packet_cleanup(struct mosquitto *context);
+int mosquitto_handle_cluster(struct mosquitto_db *db);
+int mosquitto_handle_retain(struct mosquitto_db *db);
+int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context);
+int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub, uint8_t qos);
+int mosquitto_cluster_unsubscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub);
+int mosquitto_cluster_client_disconnect(struct mosquitto_db *db, struct mosquitto *context);
+int handle__private(struct mosquitto_db *db, struct mosquitto *context);
+int handle__private_subscribe(struct mosquitto_db *db, struct mosquitto *context);
+int handle__private_retain(struct mosquitto_db *db, struct mosquitto *context);
+int handle__session_req(struct mosquitto_db *db, struct mosquitto *context);
+int handle__session_resp(struct mosquitto_db *db, struct mosquitto *context);
+
+#endif
+
 void do_disconnect(struct mosquitto_db *db, struct mosquitto *context);
 
 #endif
