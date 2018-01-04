@@ -37,7 +37,15 @@ int handle__connack(struct mosquitto_db *db, struct mosquitto *context)
 	if(!context){
 		return MOSQ_ERR_INVAL;
 	}
+#ifdef WITH_CLUSTER
+	if(context->is_node){
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received CONNACK from node: %s.", context->node->name);
+	}else{
+		log__printf(NULL, MOSQ_LOG_DEBUG, "Received CONNACK on connection %s.", context->id);
+	}
+#else
 	log__printf(NULL, MOSQ_LOG_DEBUG, "Received CONNACK on connection %s.", context->id);
+#endif
 	if(packet__read_byte(&context->in_packet, &byte)) return 1; // Reserved byte, not used
 	if(packet__read_byte(&context->in_packet, &rc)) return 1;
 	switch(rc){
@@ -90,12 +98,22 @@ int handle__connack(struct mosquitto_db *db, struct mosquitto *context)
 					}
 				}
 			}
+#ifdef WITH_CLUSTER
+			if(context->is_node){
+				if(mosquitto_cluster_init(db, context))
+					return 1;
+			}
+#endif
 			context->state = mosq_cs_connected;
 			return MOSQ_ERR_SUCCESS;
 		case CONNACK_REFUSED_PROTOCOL_VERSION:
 			if(context->bridge){
 				context->bridge->try_private_accepted = false;
 			}
+#ifdef WITH_CLUSTER
+			if(context->node)
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Connection Refused: private cluster protocol has been refused with node: %s", context->node->name);
+#endif
 			log__printf(NULL, MOSQ_LOG_ERR, "Connection Refused: unacceptable protocol version");
 			return 1;
 		case CONNACK_REFUSED_IDENTIFIER_REJECTED:

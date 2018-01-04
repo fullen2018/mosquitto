@@ -42,7 +42,8 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 	assert(mosq);
 	assert(mosq->id);
 
-#if defined(WITH_BROKER) && defined(WITH_BRIDGE)
+#if defined(WITH_BROKER) && (defined(WITH_BRIDGE)||defined(WITH_CLUSTER))
+#ifdef WITH_BRIDGE
 	if(mosq->bridge){
 		clientid = mosq->bridge->remote_clientid;
 		username = mosq->bridge->remote_username;
@@ -52,6 +53,18 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 		username = mosq->username;
 		password = mosq->password;
 	}
+#endif
+#ifdef WITH_CLUSTER
+	if(mosq->is_node){
+		clientid = mosq->node->remote_clientid;
+		username = mosq->node->remote_username;
+		password = mosq->node->remote_password;
+	}else{
+		clientid = mosq->id;
+		username = mosq->username;
+		password = mosq->password;
+	}
+#endif
 #else
 	clientid = mosq->id;
 	username = mosq->username;
@@ -84,7 +97,10 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 			payloadlen += 2+strlen(password);
 		}
 	}
-
+#ifdef WITH_CLUSTER
+	if(mosq->is_node)
+		payloadlen += 8;
+#endif
 	packet->command = CONNECT;
 	packet->remaining_length = headerlen+payloadlen;
 	rc = packet__alloc(packet);
@@ -105,6 +121,14 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 	}else{
 	}
 #endif
+#if defined(WITH_BROKER) && defined(WITH_CLUSTER)
+	if(mosq->is_node){
+		if(mosq->state == mosq_cs_new || mosq->state == mosq_cs_connect_pending){
+			version |= MOSQ_NODE_MEET;
+		}
+	}
+#endif
+
 	packet__write_byte(packet, version);
 	byte = (clean_session&0x1)<<1;
 	if(will){
@@ -136,6 +160,10 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 #ifdef WITH_BROKER
 # ifdef WITH_BRIDGE
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending CONNECT", clientid);
+# endif
+# ifdef WITH_CLUSTER
+    if(mosq->node)
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending CONNECT to node: %s addr(%s:%d)", mosq->node->name, mosq->node->address, mosq->node->port);
 # endif
 #else
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending CONNECT", clientid);

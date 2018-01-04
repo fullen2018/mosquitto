@@ -207,7 +207,10 @@ struct mosquitto {
 #ifdef WITH_BROKER
 	bool is_dropping;
 	bool is_bridge;
+	bool is_node;
+	bool is_peer;
 	struct mosquitto__bridge *bridge;
+	struct mosquitto__node *node;
 	struct mosquitto_client_msg *inflight_msgs;
 	struct mosquitto_client_msg *last_inflight_msg;
 	struct mosquitto_client_msg *queued_msgs;
@@ -223,6 +226,15 @@ struct mosquitto {
 	struct mosquitto__subhier **subs;
 	int sub_count;
 	int pollfd_index;
+	bool save_subs;
+	bool is_sys_topic;
+	bool is_db_dup_sub;
+	uint16_t last_sub_id;
+	int client_topic_count;
+	int64_t remote_time_offset;
+	char* last_sub_client_id;
+	struct mosquitto_db *db;
+	struct client_topic_table **client_topics;
 #  ifdef WITH_WEBSOCKETS
 #    if defined(LWS_LIBRARY_VERSION_NUMBER)
 	struct lws *wsi;

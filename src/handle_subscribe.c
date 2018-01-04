@@ -22,8 +22,9 @@ Contributors:
 #include "mosquitto_broker_internal.h"
 #include "memory_mosq.h"
 #include "packet_mosq.h"
-
-
+#ifdef WITH_CLUSTER
+#include <assert.h>
+#endif
 
 int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 {
@@ -36,9 +37,18 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 	uint32_t payloadlen = 0;
 	int len;
 	char *sub_mount;
+#ifdef WITH_CLUSTER
+	int i;
+	struct mosquitto *node;
+#endif
 
 	if(!context) return MOSQ_ERR_INVAL;
-	log__printf(NULL, MOSQ_LOG_DEBUG, "Received SUBSCRIBE from %s", context->id);
+#ifdef WITH_CLUSTER
+	if(context->is_peer)
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received SUBSCRIBE from peer: %s", context->id);
+	else
+#endif
+		log__printf(NULL, MOSQ_LOG_DEBUG, "Received SUBSCRIBE from %s", context->id);
 	/* FIXME - plenty of potential for memory leaks here */
 
 	if(context->protocol == mosq_p_mqtt311){
@@ -56,6 +66,9 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 		}
 
 		if(sub){
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(STREMPTY(sub)){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Empty subscription string from %s, disconnecting.",
@@ -64,6 +77,9 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 				mosquitto__free(payload);
 				return 1;
 			}
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(mosquitto_sub_topic_check(sub)){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Invalid subscription string from %s, disconnecting.",
@@ -72,6 +88,9 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 				mosquitto__free(payload);
 				return 1;
 			}
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(mosquitto_validate_utf8(sub, strlen(sub))){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Malformed UTF-8 in subscription string from %s, disconnecting.",
@@ -125,6 +144,12 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 			}
 
 			if(qos != 0x80){
+#ifdef WITH_CLUSTER
+				if(!context->is_peer && !IS_SYS_TOPIC(sub)){
+					if(mosquitto_cluster_subscribe(db, context, sub, qos))
+						return 1;
+				}
+#endif
 				rc2 = sub__add(db, context, sub, qos, &db->subs);
 				if(rc2 == MOSQ_ERR_SUCCESS){
 					if(sub__retain_queue(db, context, sub, qos)) rc = 1;

@@ -24,6 +24,9 @@ Contributors:
 #include "mqtt3_protocol.h"
 #include "packet_mosq.h"
 #include "send_mosq.h"
+#ifdef WITH_CLUSTER
+#include "assert.h"
+#endif
 /*
 #include "sys_tree.h"
 #include "time_mosq.h"
@@ -37,8 +40,12 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 	char *sub;
 
 	if(!context) return MOSQ_ERR_INVAL;
+#ifdef WITH_CLUSTER
+	if(context->is_peer)
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received UNSUBSCRIBE from peer: %s", context->id);
+	else
+#endif
 	log__printf(NULL, MOSQ_LOG_DEBUG, "Received UNSUBSCRIBE from %s", context->id);
-
 	if(context->protocol == mosq_p_mqtt311){
 		if((context->in_packet.command&0x0F) != 0x02){
 			return MOSQ_ERR_PROTOCOL;
@@ -53,6 +60,9 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 		}
 
 		if(sub){
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(STREMPTY(sub)){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Empty unsubscription string from %s, disconnecting.",
@@ -60,6 +70,9 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 				mosquitto__free(sub);
 				return 1;
 			}
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(mosquitto_sub_topic_check(sub)){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Invalid unsubscription string from %s, disconnecting.",
@@ -67,6 +80,9 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 				mosquitto__free(sub);
 				return 1;
 			}
+#ifdef WITH_CLUSTER
+			if(!context->is_peer)
+#endif
 			if(mosquitto_validate_utf8(sub, strlen(sub))){
 				log__printf(NULL, MOSQ_LOG_INFO,
 						"Malformed UTF-8 in unsubscription string from %s, disconnecting.",
@@ -76,6 +92,12 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 			}
 
 			log__printf(NULL, MOSQ_LOG_DEBUG, "\t%s", sub);
+#ifdef WITH_CLUSTER
+			if(!context->is_peer && !IS_SYS_TOPIC(sub)){
+				if(mosquitto_cluster_unsubscribe(db, context, sub)
+					return 1;
+			}
+#endif
 			sub__remove(db, context, sub, db->subs);
 			log__printf(NULL, MOSQ_LOG_UNSUBSCRIBE, "%s %s", context->id, sub);
 			mosquitto__free(sub);

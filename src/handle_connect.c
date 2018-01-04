@@ -368,7 +368,27 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 			}
 		}
 	}
-
+#ifdef WITH_CLUSTER
+	if((protocol_version & MOSQ_NODE_MASK) == MOSQ_NODE_MEET){
+		context->is_node = false;
+		context->is_peer = true;
+		int64_t remote_time, local_time;
+		packet__read_int64(&context->in_packet, &remote_time);
+		local_time = mosquitto_time();
+		context->remote_time_offset = remote_time - local_time;
+		for(i = 0; i<db->node_context_count; i++){
+			if(db->node_contexts[i] && 
+				!db->node_contexts[i]->node->handshaked && 
+				db->node_contexts[i]->sock == INVALID_SOCKET && 
+				!strcmp(db->node_contexts[i]->node->address, context->address)){
+				log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] Receive CONNECT from peer:%s, node:%s current disconnected, trigger CONNECT immediately.",
+															context->id, db->node_contexts[i]->id);
+				db->node_contexts[i]->node->attemp_reconnect = mosquitto_time();
+				break;
+			}
+		}
+	}
+#endif
 #ifdef WITH_TLS
 	if(context->listener && context->listener->ssl_ctx && (context->listener->use_identity_as_username || context->listener->use_subject_as_username)){
 		if(!context->ssl){
@@ -519,6 +539,11 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 			context->sub_count = found_context->sub_count;
 			found_context->sub_count = 0;
 			context->last_mid = found_context->last_mid;
+#ifdef WITH_CLUSTER
+			context->client_topics = found_context->client_topics;
+			context->client_topic_count = found_context->client_topic_count;
+			found_context->save_subs = true;
+#endif
 
 			for(i=0; i<context->sub_count; i++){
 				if(context->subs[i]){
@@ -537,6 +562,15 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		found_context->state = mosq_cs_disconnecting;
 		do_disconnect(db, found_context);
 	}
+#ifdef WITH_CLUSTER
+	else if(!context->is_peer){
+		struct mosquitto *node;
+		for(i = 0; i<db->node_context_count; i++){
+			node = db->node_contexts[i];
+			send__session_req(node, client_id, clean_session);
+		}
+	}
+#endif
 
 	/* Associate user with its ACL, assuming we have ACLs loaded. */
 	if(db->acl_list){
@@ -580,6 +614,14 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 			}else{
 				log__printf(NULL, MOSQ_LOG_NOTICE, "New bridge connected from %s as %s (c%d, k%d).", context->address, client_id, clean_session, context->keepalive);
 			}
+#ifdef WITH_CLUSTER
+		}else if(context->is_peer){
+			if(context->username){
+				log__printf(NULL, MOSQ_LOG_NOTICE, "New peer connected from %s as %s (c%d, k%d, u'%s').", context->address, client_id, clean_session, context->keepalive, context->username);
+			}else{
+				log__printf(NULL, MOSQ_LOG_NOTICE, "New peer connected from %s as %s (c%d, k%d).", context->address, client_id, clean_session, context->keepalive);
+			}
+#endif
 		}else{
 			if(context->username){
 				log__printf(NULL, MOSQ_LOG_NOTICE, "New client connected from %s as %s (c%d, k%d, u'%s').", context->address, client_id, clean_session, context->keepalive, context->username);

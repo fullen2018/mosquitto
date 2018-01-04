@@ -62,6 +62,9 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 	retain = (header & 0x01);
 
 	if(packet__read_string(&context->in_packet, &topic)) return 1;
+#ifdef WITH_CLUSTER
+	if(!context->is_node)
+#endif
 	if(STREMPTY(topic)){
 		/* Invalid publish topic, disconnect client. */
 		mosquitto__free(topic);
@@ -115,6 +118,9 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 		}
 	}
 #endif
+#ifdef WITH_CLUSTER
+	if(!context->is_node)
+#endif
 	if(mosquitto_pub_topic_check(topic) != MOSQ_ERR_SUCCESS){
 		/* Invalid publish topic, just swallow it. */
 		mosquitto__free(topic);
@@ -166,6 +172,9 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 	}
 
 	/* Check for topic access */
+#ifdef WITH_CLUSTER
+	if(!context->is_node)
+#endif
 	rc = mosquitto_acl_check(db, context, topic, MOSQ_ACL_WRITE);
 	if(rc == MOSQ_ERR_ACL_DENIED){
 		log__printf(NULL, MOSQ_LOG_DEBUG, "Denied PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
@@ -175,8 +184,19 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 		UHPA_FREE(payload, payloadlen);
 		return rc;
 	}
-
+#ifdef WITH_CLUSTER
+	time_t now = mosquitto_time();
+	if(context->is_node)
+	  log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received PUBLISH from node: %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->node->name, dup, qos, retain, mid, topic, (long)payloadlen);
+	else
+	  log__printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes)) at %ld", context->id, dup, qos, retain, mid, topic, (long)payloadlen,(int64_t)now);
+#else
 	log__printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
+#endif
+
+#ifdef WITH_CLUSTER
+	if(!context->is_node)
+#endif
 	if(qos > 0){
 		db__message_store_find(context, mid, &stored);
 	}
@@ -190,8 +210,20 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 		topic = stored->topic;
 		dup = 1;
 	}
-
-	switch(qos){
+#ifdef WITH_CLUSTER
+	uint8_t process_qos;
+	if(context->is_node){
+		stored->from_node = true;
+		process_qos = 0;
+	}else{
+		stored->from_node = false;
+		process_qos = qos;
+	}
+	switch(process_qos)
+#else
+	switch(qos)
+#endif
+	{
 		case 0:
 			if(sub__messages_queue(db, context->id, topic, qos, retain, &stored)) rc = 1;
 			break;

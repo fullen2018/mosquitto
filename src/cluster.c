@@ -39,17 +39,15 @@ Contributors:
 #include "tls_mosq.h"
 #include "util_mosq.h"
 #include "will_mosq.h"
-#ifdef WITH_EPOLL_V2
-#include "mosquitto_minheap_internal.h"
-#endif
 
 #ifdef WITH_CLUSTER
-char cluster_msg[200]={0};
 void node__disconnect(struct mosquitto_db *db, struct mosquitto *context)
 {
+	if(!context->is_node)
+		return;
 	if(context->state == mosq_cs_connected){
-		db->nodes_disconn_times++;
-		db->current_nodes--;
+		nodes_disconn_times++;
+		current_nodes--;
 	}
 	context->node->attemp_reconnect = mosquitto_time() + MOSQ_ERR_INTERVAL;
 	context->node->handshaked = false;
@@ -62,17 +60,7 @@ void node__disconnect(struct mosquitto_db *db, struct mosquitto *context)
 	COMPAT_CLOSE(context->sock);
 	context->sock = INVALID_SOCKET;
 	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] node: %s down, do_disconnect now.", context->id);
-
-	memset(cluster_msg, 0, 200);
-	struct tm *ptime;
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	ptime = localtime(&tv.tv_sec);
-	snprintf(cluster_msg, 200, "%d-%d-%d %d:%d:%d:Total Nodes: %d, current connected Nodes: %d, total disconnected times: %d.(%s:%d)", 
-								(1900+ptime->tm_year), (1+ptime->tm_mon), ptime->tm_mday, (ptime->tm_hour), ptime->tm_min, ptime->tm_sec, 
-								db->config->node_count+1, db->current_nodes+1, db->nodes_disconn_times,__FUNCTION__,__LINE__);
-
-	db__messages_easy_queue(db, NULL, "/cluster/stat", 0, strlen(cluster_msg), cluster_msg, true);
+	return;
 }
 
 int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
@@ -95,6 +83,7 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 		new_context = mosquitto__calloc(1, sizeof(struct mosquitto));
 		if(!new_context){
 			_mosquitto_free(local_id);
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] ERROR: out of memory while creating node: %s.", node->name);
 			return MOSQ_ERR_NOMEM;
 		}
 		new_context->state = mosq_cs_new;
@@ -171,6 +160,7 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 		db->node_contexts[db->node_context_count-1] = new_context;
 		return MOSQ_ERR_SUCCESS;
 	}else{
+		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] ERROR: out of memory while creating node: %s.", node->name);
 		return MOSQ_ERR_NOMEM;
 	}
 }
@@ -211,6 +201,91 @@ void node__cleanup(struct mosquitto_db *db, struct mosquitto *context)
 	context->node->remote_password = NULL;
 }
 
+int node__try_connect(mosquitto_db *db, mosquitto *context)
+{
+	int rc;
+	time_t now = mosquitto_time();
+	if(!context->is_node)
+		return MOSQ_ERR_INVAL;
+	mosquitto__node *node = context->node;
+	rc = net__try_connect(context, node->address, node->port, &context->sock, NULL, false);
+	if(rc == 0){
+		context->state = mosq_cs_new;
+		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Success in handshake with node: %s immediately.", node->name);
+		node->handshaked = true;
+		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
+		send__connect(context, context->keepalive, false);
+		context->next_pingreq = now;
+	}else if(rc < 0){
+		context->state = mosq_cs_connect_pending;
+		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Current cannot handshake with node: %s. reason:%s.", node->name, strerror(errno));
+		node->handshaked = false;
+		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
+	}else{
+		context->state = mosq_cs_disconnected;
+		assert(context->sock == INVALID_SOCKET);
+		node->handshaked = false;
+		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Error in handshake with node: %s. reason:%s.", node->name, strerror(errno));
+	}
+	return rc;
+}
+
+int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
+{
+	int err, rc, reconnect_interval;
+	time_t now = mosquitto_time();
+	mosquitto__node *node = context->node;
+	socklen_t errlen = sizeof(err);/* getsockopt return -1 on solaris and return 0 on other os. */
+	rc = getsockopt(context->sock, SOL_SOCKET, SO_ERROR, &err, &errlen);
+	if(rc == 0 && err == 0){
+		context->state = mosq_cs_new;
+		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Finally handshake with node: %s success.", node->name);
+		node->handshaked = true;
+		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
+	    //log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Will send CONNECT with node: %s.", peer_context->node->name);
+		send__connect(context, context->keepalive, true);
+		context->next_pingreq = now;
+		node->connrefused_interval = 2;
+		node->hostunreach_interval = 2;
+		return MOSQ_ERR_SUCCESS;
+	}else{
+		context->state = mosq_cs_disconnected;
+		//log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Still cannot handshake with node: %s. reason:%d. will close sockfd.", peer_context->node->name, err);
+		node->handshaked = false;
+		COMPAT_CLOSE(context->sock);
+		context->sock = INVALID_SOCKET;
+		switch(err){
+			case EINPROGRESS:
+				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s is busy, will reconnect later after %d seconds..", node->name, MOSQ_EINPROGRESS_INTERVAL);
+				node->attemp_reconnect = now + MOSQ_EINPROGRESS_INTERVAL;
+				context->state = mosq_cs_connect_pending;
+				return MOSQ_ERR_CONN_PENDING;
+			case EHOSTUNREACH:
+				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s OS maybe down or network unavailable, will reconnect later after %d seconds..", node->name, node->hostunreach_interval);
+				node->attemp_reconnect = now + node->hostunreach_interval;
+				if(node->hostunreach_interval*2 < MOSQ_NO_ROUTE_INTERVAL_MAX)
+					reconnect_interval = node->hostunreach_interval*2;
+				else
+					reconnect_interval = MOSQ_NO_ROUTE_INTERVAL_MAX;
+				node->hostunreach_interval = reconnect_interval;
+				return MOSQ_ERR_CONN_LOST;
+			case ECONNREFUSED:
+				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s service maybe down, will reconnect later after %d seconds..", node->name, node->connrefused_interval);
+				node->attemp_reconnect = now + node->connrefused_interval;
+				if(node->connrefused_interval*2 < MOSQ_ECONNREFUSED_INTERVAL_MAX)
+					reconnect_interval = node->connrefused_interval*2;
+				else
+					reconnect_interval = MOSQ_ECONNREFUSED_INTERVAL_MAX;
+				node->connrefused_interval = reconnect_interval;
+				return MOSQ_ERR_CONN_REFUSED;
+			default:
+				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] unknow reason while connect with node: %s, will try to reconnect after %d seconds..", node->name, MOSQ_ERR_INTERVAL);
+				node->attemp_reconnect = now + MOSQ_ERR_INTERVAL;
+				return MOSQ_ERR_NO_CONN;
+		}
+	}
+}
+
 void node__packet_cleanup(struct mosquitto *context)
 {
 	struct mosquitto__packet *packet;
@@ -231,146 +306,6 @@ void node__packet_cleanup(struct mosquitto *context)
 	context->out_packet_last = NULL;
 
 	packet__cleanup(&(context->in_packet));
-}
-
-int mosquitto_handle_cluster(struct mosquitto_db *db)
-{
-	struct mosquitto__config *cfg = db->config;
-	struct mosquitto__node *node;
-	struct mosquitto *context;
-	int i;
-	time_t now = mosquitto_time();
-
-	cfg = db->config;
-	for(i=0; i<cfg->node_count; i++){
-		node = &(cfg->nodes[i]);
-		if(!node->context){
-			if(mqtt3_node_new(db, node)){
-				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] ERROR: out of memory while creating node: %s.", node->name);
-			}
-		}
-	}
-
-	for(i=0; i<db->node_context_count; i++){
-		context = db->node_contexts[i];
-		if(!context){
-			continue;
-		}
-		if(context->state == mosq_cs_connected && context->node->handshaked &&
-		   context->ping_t && now - context->ping_t >= MOSQ_CHECKPINGRESP_INTERVAL){
-		/* ping_t !=0 means we are waiting for a PINGRESP.			*
-		  * so if we are waiting for a PINGRESP for more than 2 seconds, *
-		  * the remote node(OS) maybe crashed..					 */
-		    log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Remote node(OS): %s maybe crashed, close node and reconnect later.", context->node->name);
-			context->ping_t = 0;
-			context->node->handshaked = false;
-			do_disconnect(db, context);
-			continue;
-		}
-
-		if(context->state == mosq_cs_connected && context->node->handshaked && 
-            context->keepalive && (now >= context->next_pingreq)){
-        /* send PINGREQ 5s after each msg send, not only previous PINGREQ, to save traffic. */
-		/* this is not good, fix to 5s each time */
-			if(send__pingreq(context)){
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Failed in send PINGREQ with node: %s, close node and reconnect later.", context->node->name);
-				do_disconnect(db, context);
-			}
-			context->next_pingreq += context->keepalive;
-			continue;
-		}
-
-		if(now >= context->node->attemp_reconnect &&
-		  !context->node->handshaked && context->sock == INVALID_SOCKET){
-			int rc;
-			rc = net__try_connect(context, context->node->address, context->node->port, &context->sock, NULL, false);
-			if(rc == 0){
-				context->state = mosq_cs_new;
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Success in handshake with node: %s immediately.", context->node->name);
-				context->node->handshaked = true;
-				HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
-				send__connect(context, context->keepalive, false);
-				context->next_pingreq = now;
-				db->current_nodes++;
-				memset(cluster_msg, 0, 200);
-
-				struct tm *ptime;
-				struct timeval tv;
-				gettimeofday(&tv, NULL);
-				ptime = localtime(&tv.tv_sec);
-				snprintf(cluster_msg, 200, "%d-%d-%d %d:%d:%d: Total Nodes: %d, current connected Nodes: %d, total disconnected times: %d.(%s:%d)", 
-										  (1900+ptime->tm_year), (1+ptime->tm_mon), ptime->tm_mday, (ptime->tm_hour), ptime->tm_min, ptime->tm_sec, 
-										  db->config->node_count+1, db->current_nodes+1, db->nodes_disconn_times,__FUNCTION__,__LINE__);
-
-				db__messages_easy_queue(db, NULL, "/cluster/stat",0,strlen(cluster_msg),cluster_msg,true);
-			}else if(rc < 0){
-				context->state = mosq_cs_connect_pending;
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Current cannot handshake with node: %s. reason:%s.", context->node->name, strerror(errno));
-				context->node->handshaked = false;
-				context->node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
-			}else{
-				context->state = mosq_cs_disconnected;
-				assert(context->sock == INVALID_SOCKET);
-				context->node->handshaked = false;
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Error in handshake with node: %s. reason:%s.", context->node->name, strerror(errno));
-			}
-			continue;
-		}
-
-		if(context->is_node && context->sock != INVALID_SOCKET && 
-		   !context->node->handshaked && now >= context->node->check_handshake){
-			//check whether handshake success..
-			int err, rc;
-			socklen_t errlen = sizeof(err);/* getsockopt return -1 on solaris and return 0 on other os. */
-			rc = getsockopt(context->sock, SOL_SOCKET, SO_ERROR, &err, &errlen);
-			if(rc == 0 && err == 0){
-				context->state = mosq_cs_new;
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Finally handshake with node: %s success.", context->node->name);
-				context->node->handshaked = true;
-				HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
-			    //log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Will send CONNECT with node: %s.", peer_context->node->name);
-				send__connect(context, context->keepalive, true);
-				context->next_pingreq = now;
-				context->node->connrefused_interval = 2;
-				context->node->hostunreach_interval = 2;
-				db->current_nodes++;
-				memset(cluster_msg, 0, 200);
-
-				struct tm *ptime;
-				struct timeval tv;
-				gettimeofday(&tv, NULL);
-				ptime = localtime(&tv.tv_sec);
-				snprintf(cluster_msg, 200, "%d-%d-%d %d:%d:%d: Total Nodes: %d, current connected Nodes: %d, total disconnected times: %d.(%s:%d)", 
-										  (1900+ptime->tm_year), (1+ptime->tm_mon), ptime->tm_mday, (ptime->tm_hour), ptime->tm_min, ptime->tm_sec, 
-										  db->config->node_count+1, db->current_nodes+1, db->nodes_disconn_times,__FUNCTION__,__LINE__);
-
-				db__messages_easy_queue(db, NULL, "/cluster/stat",0,strlen(cluster_msg),cluster_msg,true);
-			}else{
-				context->state = mosq_cs_connect_pending;
-				//log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Still cannot handshake with node: %s. reason:%d. will close sockfd.", peer_context->node->name, err);
-				context->node->handshaked = false;
-				COMPAT_CLOSE(context->sock);
-				if(err == EINPROGRESS){
-					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s service is busy, will reconnect later after %d seconds..", context->node->name, MOSQ_EINPROGRESS_INTERVAL);
-					context->node->attemp_reconnect = now + MOSQ_EINPROGRESS_INTERVAL; /* 3..3..3..3.. */
-				}else if(err == EHOSTUNREACH){
-					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s OS maybe down, or network unavailable, will reconnect later after %d seconds..", context->node->name, context->node->hostunreach_interval);
-					context->node->attemp_reconnect = now + context->node->hostunreach_interval; /* 2..4..8..16..32..60 */
-					context->node->hostunreach_interval = (context->node->hostunreach_interval*2 < MOSQ_NO_ROUTE_INTERVAL_MAX) ? context->node->hostunreach_interval*2 : MOSQ_NO_ROUTE_INTERVAL_MAX;
-				}else if(err == ECONNREFUSED){
-					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s service maybe down, will reconnect later after %d seconds..", context->node->name, context->node->connrefused_interval);
-					context->node->attemp_reconnect = now + context->node->connrefused_interval; /* 2..4..8..16..20 */
-					context->node->connrefused_interval = (context->node->connrefused_interval*2 < MOSQ_ECONNREFUSED_INTERVAL_MAX) ? context->node->connrefused_interval*2 : MOSQ_ECONNREFUSED_INTERVAL_MAX;
-				}else{
-					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] unknow reason when connect with node: %s, will try to reconnect after %d seconds..", context->node->name, MOSQ_ERR_INTERVAL);
-					context->node->attemp_reconnect = now + MOSQ_ERR_INTERVAL; /* 120..120..120.. */
-				}
-				context->sock = INVALID_SOCKET;
-			}
-			continue;
-		}
-	}
-	return MOSQ_ERR_SUCCESS;
 }
 
 int mosquitto_handle_retain(struct mosquitto_db *db)
@@ -404,7 +339,7 @@ int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context)
 	char notification_payload;
 	char *notification_topic;
 	char **topic_arr;
-	
+
 	if(context->is_node){/* keep cluster status */
 		notification_topic_len = strlen(context->node->remote_clientid) + strlen("$SYS/broker/connection/cluster//state");
 		notification_topic = _mosquitto_malloc(sizeof(char)*(notification_topic_len+1));
@@ -423,7 +358,7 @@ int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context)
 			assert(topic->topic_payload);
 			topic_arr[i++] = topic->topic_payload;
 			if(i == MULTI_SUB_MAX_TOPICS){
-				if(_mosquitto_send_multi_subscribes(context, NULL, topic_arr, i)){
+				if(send__multi_subscribes(context, NULL, topic_arr, i)){
 					mosquitto__free(topic_arr);
 					return 1;
 				}
@@ -431,7 +366,7 @@ int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context)
 			}
 		}
 		if(i > 0 && i < MULTI_SUB_MAX_TOPICS){
-			if(_mosquitto_send_multi_subscribes(context, NULL, topic_arr, i)){
+			if(send__multi_subscribes(context, NULL, topic_arr, i)){
 				mosquitto__free(topic_arr);
 				return 1;
 			}
@@ -527,7 +462,7 @@ int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *conte
 	for(i=0; i<db->node_context_count && !context->is_db_dup_sub; i++){/* if this is a dupilicate db sub, then local must have the newest retained msg. */
 		node = db->node_contexts[i];
 		if(node && node->state == mosq_cs_connected){
-			_mosquitto_send_private_subscribe(node, NULL, sub, qos, context->id, db->sub_id);
+			send__private_subscribe(node, NULL, sub, qos, context->id, db->sub_id);
 		}
 	}
 

@@ -178,6 +178,42 @@ struct mosquitto__auth_plugin_config
 	bool deny_special_chars;
 };
 
+#ifdef WITH_CLUSTER
+struct mosquitto__node{
+	char *name;
+	char *address;
+	int port;
+	bool clean_session;
+	int keepalive;
+	enum mosquitto__protocol protocol_version;
+	bool private_accepted;
+	char *remote_clientid;
+	char *remote_username;
+	char *remote_password;
+	char *local_clientid;
+	char *local_username;
+	char *local_password;
+#ifdef WITH_TLS
+	char *tls_cafile;
+	char *tls_capath;
+	char *tls_certfile;
+	char *tls_keyfile;
+	bool tls_insecure;
+	char *tls_version;
+#  ifdef REAL_WITH_TLS_PSK
+	char *tls_psk_identity;
+	char *tls_psk;
+#  endif
+#endif
+	struct mosquitto *context;
+	time_t attemp_reconnect;
+	time_t check_handshake;
+	int hostunreach_interval;
+	int connrefused_interval;
+	bool handshaked;
+};
+#endif
+
 struct mosquitto__config {
 	char *config_file;
 	char *acl_file;
@@ -221,6 +257,11 @@ struct mosquitto__config {
 #ifdef WITH_BRIDGE
 	struct mosquitto__bridge *bridges;
 	int bridge_count;
+#endif
+#ifdef WITH_CLUSTER
+	struct mosquitto_db *db;
+	struct mosquitto__node *nodes;
+	int node_count;
 #endif
 	struct mosquitto__auth_plugin_config *auth_plugins;
 	int auth_plugin_count;
@@ -341,6 +382,84 @@ struct mosquitto__auth_plugin{
 	FUNC_auth_plugin_psk_key_get_v2 psk_key_get_v2;
 	int version;
 };
+
+#ifdef WITH_CLUSTER
+#define MOSQ_NODE_MASK 0xF0
+#define MOSQ_NODE_MEET 0x40
+#define MOSQ_NODE_SEND_SUB 0xC0
+
+#define MOSQ_EINPROGRESS_INTERVAL 3
+#define MOSQ_ECONNREFUSED_INTERVAL_MAX 20
+#define MOSQ_NO_ROUTE_INTERVAL_MAX 60
+#define MOSQ_ERR_INTERVAL 120
+#define MOSQ_CHECKCONN_INTERVAL 2
+
+#define MOSQ_CHECKPINGRESP_INTERVAL 5
+#define MOSQ_CLUSTER_KEEPALIVE 10
+
+#define MULTI_SUB_MAX_TOPICS 30 /* 1460/30 = 48(per topic length), try to send them inside one IP packet. */
+
+struct _mqtt3_node{
+	char *name;
+	char *address;
+	int port;
+	bool clean_session;
+	int keepalive;
+	enum _mosquitto_protocol protocol_version;
+	bool private_accepted;
+	char *remote_clientid;
+	char *remote_username;
+	char *remote_password;
+	char *local_clientid;
+	char *local_username;
+	char *local_password;
+#ifdef WITH_TLS
+	char *tls_cafile;
+	char *tls_capath;
+	char *tls_certfile;
+	char *tls_keyfile;
+	bool tls_insecure;
+	char *tls_version;
+#ifdef REAL_WITH_TLS_PSK
+	char *tls_psk_identity;
+	char *tls_psk;
+#endif
+#endif
+	struct mosquitto *context;
+	time_t attemp_reconnect;
+	time_t check_handshake;
+	int hostunreach_interval;
+	int connrefused_interval;
+	bool handshaked;
+};
+
+struct topic_table{
+	char *topic_payload;
+	int ref_cnt;
+	UT_hash_handle hh;
+};
+
+struct client_topic_table{
+	struct topic_table *topic_tbl;
+	uint8_t sub_qos;
+};
+
+enum mosquitto_cluster_private_msg_type{
+	PRIVATE_SUBSCRIBE = 0,
+	PRIVATE_RETAIN = 1,
+	SESSION_REQ = 2,
+	SESSION_RESP = 3
+};
+
+struct mosquitto_client_retain{
+	uint16_t sub_id;
+	time_t expect_send_time;
+	struct mosquitto *client;
+	struct mosquitto_client_retain *next;
+	struct mosquitto_client_msg *retain_msgs;
+};
+#define IS_SYS_TOPIC(sub) (!strncmp((sub), "$SYS", 4))
+#endif
 
 struct mosquitto_db{
 	dbid_t last_db_id;
@@ -630,7 +749,8 @@ void node__disconnect(struct mosquitto_db *db, struct mosquitto *context);
 int node__new(struct mosquitto_db *db, struct mosquitto__node *node);
 void node__cleanup(struct mosquitto_db *db, struct mosquitto *context);
 void node__packet_cleanup(struct mosquitto *context);
-int mosquitto_handle_cluster(struct mosquitto_db *db);
+int node__try_connect(mosquitto_db *db, mosquitto *context);
+int node__check_connect(struct mosquitto_db *db, struct mosquitto *context);
 int mosquitto_handle_retain(struct mosquitto_db *db);
 int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context);
 int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub, uint8_t qos);

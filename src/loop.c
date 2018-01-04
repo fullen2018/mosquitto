@@ -126,6 +126,10 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 	mosq_sock_t bridge_sock;
 	int rc;
 #endif
+#ifdef WITH_CLUSTER
+	struct mosquitto__node *node;
+	struct mosquitto *node_context;
+#endif
 	time_t expiration_check_time = 0;
 	char *id;
 
@@ -211,6 +215,86 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 		}
 #endif
 
+#ifdef WITH_CLUSTER
+		mosquitto_handle_retain(db);
+
+		for(i=0; i<db->config->node_count; i++){
+			node = &(db->config->nodes[i]);
+			if(!node->context)
+				node__new(db, node);
+		}
+		
+		for(i=0; i<db->node_context_count; i++){
+			node_context = db->node_contexts[i];
+			if(!node_context)
+				continue;
+			if(node_context->state == mosq_cs_connected && node_context->node->handshaked &&
+				node_context->ping_t && now - node_context->ping_t >= MOSQ_CHECKPINGRESP_INTERVAL){
+			    log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Remote node(OS): %s maybe crashed, close node and reconnect later.", node_context->node->name);
+				node_context->ping_t = 0;
+				node_context->node->handshaked = false;
+				do_disconnect(db, node_context);
+				continue;
+			}
+			if(node_context->state == mosq_cs_connected && node_context->node->handshaked && 
+				node_context->keepalive && (now >= node_context->next_pingreq)){
+				if(send__pingreq(node_context)){
+					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Failed in send PINGREQ with node: %s, close node and reconnect later.", node_context->node->name);
+					do_disconnect(db, node_context);
+				}
+				node_context->next_pingreq += node_context->keepalive;
+				continue;
+			}
+			if(now >= node_context->node->attemp_reconnect &&
+				!node_context->node->handshaked && node_context->sock == INVALID_SOCKET){
+				if(!node__try_connect(db, node_context)){
+#ifndef WITH_EPOLL
+					pollfds[pollfd_index].fd = listensock[i];
+					pollfds[pollfd_index].events = POLLIN;
+					pollfds[pollfd_index].revents = 0;
+					pollfd_index++;
+#else
+					ev.data.fd = context->sock;
+					ev.events = EPOLLIN;
+					context->events = EPOLLIN;
+					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, context->sock, &ev) == -1) {
+						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering bridge: %s", strerror(errno));
+						(void)close(db->epollfd);
+						db->epollfd = 0;
+						return MOSQ_ERR_UNKNOWN;
+					}	
+#endif
+				}
+				continue;
+			}
+			if(node_context->is_node && node_context->sock != INVALID_SOCKET && 
+				!node_context->node->handshaked && now >= node_context->node->check_handshake){
+				if(!node__check_connect(db, node_context)){
+#ifndef WITH_EPOLL
+					pollfds[pollfd_index].fd = listensock[i];
+					pollfds[pollfd_index].events = POLLIN;
+					pollfds[pollfd_index].revents = 0;
+					pollfd_index++;
+#else
+					ev.data.fd = context->sock;
+					ev.events = EPOLLIN;
+					context->events = EPOLLIN;
+					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, context->sock, &ev) == -1) {
+						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering bridge: %s", strerror(errno));
+						(void)close(db->epollfd);
+						db->epollfd = 0;
+						return MOSQ_ERR_UNKNOWN;
+					}	
+#endif
+				}else{
+					//
+				}
+				continue;
+			}
+			
+		}
+#endif
+
 		now_time = time(NULL);
 
 		time_count = 0;
@@ -240,9 +324,12 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 				}
 #endif
 
-				/* Local bridges never time out in this fashion. */
+				/* Local bridges and nodes never time out in this fashion. */
 				if(!(context->keepalive)
 						|| context->bridge
+#ifdef WITH_CLUSTER
+						|| context->is_node
+#endif
 						|| now - context->last_msg_in < (time_t)(context->keepalive)*3/2){
 
 					if(db__message_write(db, context) == MOSQ_ERR_SUCCESS){
@@ -579,6 +666,12 @@ void do_disconnect(struct mosquitto_db *db, struct mosquitto *context)
 	if(context->state == mosq_cs_disconnected){
 		return;
 	}
+#ifdef WITH_CLUSTER
+	if(context->is_node)
+		node__disconnect(db, context);
+	if(!context->is_node && !context->save_subs && context->clean_session)
+		mosquitto_cluster_client_disconnect(db, context);
+#endif
 #ifdef WITH_WEBSOCKETS
 	if(context->wsi){
 		if(context->state != mosq_cs_disconnecting){

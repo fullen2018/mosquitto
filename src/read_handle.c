@@ -57,13 +57,17 @@ int handle__packet(struct mosquitto_db *db, struct mosquitto *context)
 			return handle__subscribe(db, context);
 		case UNSUBSCRIBE:
 			return handle__unsubscribe(db, context);
-#ifdef WITH_BRIDGE
+#if defined(WITH_BRIDGE)||defined(WITH_CLUSTER)
 		case CONNACK:
 			return handle__connack(db, context);
 		case SUBACK:
 			return handle__suback(context);
 		case UNSUBACK:
 			return handle__unsuback(context);
+#ifdef WITH_CLUSTER
+		case PRIVATE:
+			return handle__private(db, context);
+#endif
 #endif
 		default:
 			/* If we don't recognise the command, return an error straight away. */

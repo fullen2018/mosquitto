@@ -54,6 +54,9 @@ Contributors:
 #include "mosquitto_broker_internal.h"
 #include "memory_mosq.h"
 #include "util_mosq.h"
+#ifdef WITH_CLUSTER
+#include "send_mosq.h"
+#endif
 
 struct sub__token {
 	struct sub__token *next;
@@ -123,7 +126,11 @@ static int subs__process(struct mosquitto_db *db, struct mosquitto__subhier *hie
 			}else{
 				mid = 0;
 			}
-			if(leaf->context->is_bridge){
+			if(leaf->context->is_bridge
+#ifdef WITH_CLUSTER
+				|| leaf->context->is_peer
+#endif
+				){
 				/* If we know the client is a bridge then we should set retain
 				 * even if the message is fresh. If we don't do this, retained
 				 * messages won't be propagated. */
@@ -133,7 +140,11 @@ static int subs__process(struct mosquitto_db *db, struct mosquitto__subhier *hie
 				 * retain should be false. */
 				client_retain = false;
 			}
-			if(db__message_insert(db, leaf->context, mid, mosq_md_out, msg_qos, client_retain, stored) == 1) rc = 1;
+#ifdef WITH_CLUSTER
+			if(leaf->context->is_peer) msg_qos = stored->qos;
+			if(!(stored->from_node && leaf->context->is_peer)) /* don't forward PUBLISH to brokers which comes from broker */
+#endif
+				if(db__message_insert(db, leaf->context, mid, mosq_md_out, msg_qos, client_retain, stored) == 1) rc = 1;
 		}else{
 			return 1; /* Application error */
 		}
@@ -666,7 +677,16 @@ static int retain__process(struct mosquitto_db *db, struct mosquitto_msg_store *
 	}else{
 		mid = 0;
 	}
+#ifdef WITH_CLUSTER
+	if(context->is_peer)
+		return send__private_retain(context, context->last_sub_client_id, context->last_sub_id, retained->topic, retained->qos, retained->mid, (int64_t)retained->rcv_time, retained->payloadlen, UHPA_ACCESS_PAYLOAD(retained));
+	else if(!context->is_sys_topic && !context->is_db_dup_sub)
+		return db__message_insert_into_retain_queue(db, context, mid, mosq_md_out, qos, true, retained, context->last_sub_id);
+	else /* duplicate db sub */
+		return db__message_insert(db, context, mid, mosq_md_out, qos, true, retained);
+#else
 	return db__message_insert(db, context, mid, mosq_md_out, qos, true, retained);
+#endif
 }
 
 static int retain__search(struct mosquitto_db *db, struct mosquitto__subhier *subhier, struct sub__token *tokens, struct mosquitto *context, const char *sub, int sub_qos, int level)

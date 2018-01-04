@@ -66,6 +66,9 @@ int send__unsubscribe(struct mosquitto *mosq, int *mid, const char *topic)
 # ifdef WITH_BRIDGE
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending UNSUBSCRIBE (Mid: %d, Topic: %s)", mosq->id, local_mid, topic);
 # endif
+#ifdef WITH_CLUSTER
+    log__printf(mosq, MOSQ_LOG_DEBUG, "[CLUSTER] sending UNSUBSCRIBE to %s (Mid: %d, Topic: %s)", mosq->id, local_mid, topic);
+#endif
 #else
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending UNSUBSCRIBE (Mid: %d, Topic: %s)", mosq->id, local_mid, topic);
 #endif

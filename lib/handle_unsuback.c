@@ -40,7 +40,14 @@ int handle__unsuback(struct mosquitto *mosq)
 
 	assert(mosq);
 #ifdef WITH_BROKER
+#ifdef WITH_CLUSTER
+	if(mosq->is_node)
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received UNSUBACK from node: %s", mosq->node->name);
+	else
+		log__printf(NULL, MOSQ_LOG_DEBUG, "Received UNSUBACK from %s", mosq->id);
+#else
 	log__printf(NULL, MOSQ_LOG_DEBUG, "Received UNSUBACK from %s", mosq->id);
+#endif
 #else
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s received UNSUBACK", mosq->id);
 #endif

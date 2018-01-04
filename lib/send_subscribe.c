@@ -66,6 +66,10 @@ int send__subscribe(struct mosquitto *mosq, int *mid, const char *topic, uint8_t
 # ifdef WITH_BRIDGE
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending SUBSCRIBE (Mid: %d, Topic: %s, QoS: %d)", mosq->id, local_mid, topic, topic_qos);
 # endif
+# ifdef WITH_CLUSTER
+	if(mosq->is_node)
+		log__printf(mosq, MOSQ_LOG_DEBUG, "[CLUSTER] Sending SUBSCRIBE to node: %s (Mid: %d, Topic: %s, QoS: %d)", mosq->node->name, local_mid, topic, topic_qos);
+# endif
 #else
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Client %s sending SUBSCRIBE (Mid: %d, Topic: %s, QoS: %d)", mosq->id, local_mid, topic, topic_qos);
 #endif

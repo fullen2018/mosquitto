@@ -40,6 +40,9 @@ Contributors:
 #define PINGREQ 0xC0
 #define PINGRESP 0xD0
 #define DISCONNECT 0xE0
+#ifdef WITH_CLUSTER
+#define PRIVATE 0x00
+#endif
 
 #define CONNACK_ACCEPTED 0
 #define CONNACK_REFUSED_PROTOCOL_VERSION 1
