@@ -19,6 +19,8 @@ Then config the loadbalancer, take above adresses as real server address.
 
 ## Installing
 
+Inside config.mk, comment "WITH_BRIDGE:=yes", and uncomment "WITH_CLUSTER:=yes".
+
 See <http://mosquitto.org/download/> for details on installing binaries for
 various platforms.
 
