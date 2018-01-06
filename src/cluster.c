@@ -202,7 +202,7 @@ int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
 	if(!context->is_node)
 		return MOSQ_ERR_INVAL;
 	struct mosquitto__node *node = context->node;
-	rc = net__try_connect(context, node->address, node->port, &context->sock, NULL, false);
+	rc = net__socket_connect(context, node->address, node->port, NULL, false);
 	if(rc == 0){
 		context->state = mosq_cs_new;
 		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER INIT] Success in handshake with node: %s immediately.", node->name);
@@ -216,6 +216,14 @@ int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
 		node->handshaked = false;
 		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
 	}else{
+		if(rc == MOSQ_ERR_TLS){
+			net__socket_close(db, context);
+			return rc;
+		}else if(rc == MOSQ_ERR_ERRNO){
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error connect with node: %s.", strerror(errno));
+		}else if(rc == MOSQ_ERR_EAI){
+			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error connect with: %s.", gai_strerror(errno));
+		}
 		context->state = mosq_cs_disconnected;
 		assert(context->sock == INVALID_SOCKET);
 		node->handshaked = false;

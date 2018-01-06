@@ -838,6 +838,129 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 #else
 					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
 #endif
+				}else if(!strcmp(token, "node_cafile")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#ifdef REAL_WITH_TLS_PSK
+					if(cur_node->tls_psk_identity || cur_node->tls_psk){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and psk encryption with a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+#endif
+					if(conf__parse_string(&token, "node_cafile", &cur_node->tls_cafile, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS support not available.");
+#endif
+				}else if(!strcmp(token, "node_capath")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#ifdef REAL_WITH_TLS_PSK
+					if(cur_node->tls_psk_identity || cur_node->tls_psk){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and psk encryption with a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+#endif
+					if(conf__parse_string(&token, "node_capath", &cur_node->tls_capath, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS support not available.");
+#endif
+				}else if(!strcmp(token, "node_certfile")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#ifdef REAL_WITH_TLS_PSK
+					if(cur_node->tls_psk_identity || cur_node->tls_psk){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and psk encryption with a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+#endif
+					if(conf__parse_string(&token, "node_certfile", &cur_node->tls_certfile, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS support not available.");
+#endif
+				}else if(!strcmp(token, "node_identity")){
+#if defined(WITH_CLUSTER) && defined(REAL_WITH_TLS_PSK)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(cur_node->tls_cafile || cur_node->tls_capath || cur_node->tls_certfile || cur_node->tls_keyfile){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and identity encryption with a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_identity", &cur_node->tls_psk_identity, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS-PSK support not available.");
+#endif
+				}else if(!strcmp(token, "node_insecure")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_bool(&token, "node_insecure", &cur_node->tls_insecure, saveptr)) return MOSQ_ERR_INVAL;
+					if(cur_node->tls_insecure){
+						log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Node %s using insecure mode.", cur_node->name);
+					}
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS-PSK support not available.");
+#endif
+				}else if(!strcmp(token, "node_keyfile")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+#ifdef REAL_WITH_TLS_PSK
+					if(cur_node->tls_psk_identity || cur_node->tls_psk){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and psk encryption with a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+#endif
+					if(conf__parse_string(&token, "node_keyfile", &cur_node->tls_keyfile, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS support not available.");
+#endif
+				}else if(!strcmp(token, "node_psk")){
+#if defined(WITH_CLUSTER) && defined(REAL_WITH_TLS_PSK)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(cur_node->tls_cafile || cur_node->tls_capath || cur_node->tls_certfile || cur_node->tls_keyfile){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Cannot use both certificate and psk encryption for a remote broker.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_psk", &cur_node->tls_psk, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS-PSK support not available.");
+#endif
+				}else if(!strcmp(token, "node_tls_version")){
+#if defined(WITH_CLUSTER) && defined(WITH_TLS)
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_tls_version", &cur_node->tls_version, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Cluster and/or TLS support not available.");
+#endif
 				}else if(!strcmp(token, "allow_anonymous")){
 					if(conf__parse_bool(&token, "allow_anonymous", &config->allow_anonymous, saveptr)) return MOSQ_ERR_INVAL;
 				}else if(!strcmp(token, "allow_duplicate_messages")){
