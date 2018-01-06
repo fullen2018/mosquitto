@@ -39,16 +39,14 @@ Contributors:
 #include "tls_mosq.h"
 #include "util_mosq.h"
 #include "will_mosq.h"
+#include "packet_mosq.h"
 
 #ifdef WITH_CLUSTER
 void node__disconnect(struct mosquitto_db *db, struct mosquitto *context)
 {
 	if(!context->is_node)
 		return;
-	if(context->state == mosq_cs_connected){
-		nodes_disconn_times++;
-		current_nodes--;
-	}
+	assert(context->clean_session == true);
 	context->node->attemp_reconnect = mosquitto_time() + MOSQ_ERR_INTERVAL;
 	context->node->handshaked = false;
 	context->node->connrefused_interval = 2;
@@ -56,11 +54,7 @@ void node__disconnect(struct mosquitto_db *db, struct mosquitto *context)
 
 	context->ping_t = 0;
 	context->state = mosq_cs_disconnected;
-	//HASH_DELETE(hh_sock, db->contexts_by_sock, context);
-	COMPAT_CLOSE(context->sock);
-	context->sock = INVALID_SOCKET;
 	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] node: %s down, do_disconnect now.", context->id);
-	return;
 }
 
 int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
@@ -77,12 +71,12 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 	HASH_FIND(hh_id, db->contexts_by_id, local_id, strlen(local_id), new_context);
 	if(new_context){
 		/* (possible from persistent db) */
-		_mosquitto_free(local_id);
+		mosquitto__free(local_id);
 	}else{
 		/* id wasn't found, so generate a new context */
 		new_context = mosquitto__calloc(1, sizeof(struct mosquitto));
 		if(!new_context){
-			_mosquitto_free(local_id);
+			mosquitto__free(local_id);
 			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] ERROR: out of memory while creating node: %s.", node->name);
 			return MOSQ_ERR_NOMEM;
 		}
@@ -90,7 +84,7 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 		new_context->sock = INVALID_SOCKET;
 		new_context->last_msg_in = 0;
 		new_context->next_msg_out = mosquitto_time() + MOSQ_CLUSTER_KEEPALIVE;
-		new_context->clean_session = false;
+		new_context->clean_session = true;
 		new_context->disconnect_t = 0;
 		new_context->id = NULL;
 		new_context->last_mid = 0;
@@ -100,17 +94,17 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 		new_context->is_bridge = false;
 		new_context->is_node = true;
 		new_context->is_peer = false;
-		
+
 		new_context->save_subs = false;
 		new_context->is_sys_topic = true;
 		new_context->is_db_dup_sub = true;
 		new_context->last_sub_id = 0;
-		new_context->client_topic_count = 0;
+		new_context->client_sub_count = 0;
 		new_context->remote_time_offset = 0;
 		new_context->last_sub_client_id = NULL;
 		new_context->db = db;
-		new_context->client_topics = NULL;
-		
+		new_context->client_subs = NULL;
+
 		new_context->in_packet.payload = NULL;
 		packet__cleanup(&new_context->in_packet);
 		new_context->out_packet = NULL;
@@ -127,7 +121,7 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 	}
 	new_context->sock = INVALID_SOCKET;
 	new_context->node = node;
-	new_context->keepalive = MOSQ_CLUSTER_KEEPALIVE;
+	new_context->keepalive = new_context->node->keepalive;
 	new_context->username = new_context->node->remote_username;
 	new_context->password = new_context->node->remote_password;
 
@@ -167,9 +161,9 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 
 void node__cleanup(struct mosquitto_db *db, struct mosquitto *context)
 {
-	if(!context->is_node) return;
-
 	int i;
+
+	if(!context->is_node) return;
 
 	for(i=0; i<db->node_context_count; i++){
 		if(db->node_contexts[i] == context){
@@ -181,7 +175,7 @@ void node__cleanup(struct mosquitto_db *db, struct mosquitto *context)
 
 	mosquitto__free(context->node->local_username);
 	context->node->local_username = NULL;
-	
+
 	mosquitto__free(context->node->local_password);
 	context->node->local_password = NULL;
 
@@ -201,31 +195,31 @@ void node__cleanup(struct mosquitto_db *db, struct mosquitto *context)
 	context->node->remote_password = NULL;
 }
 
-int node__try_connect(mosquitto_db *db, mosquitto *context)
+int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
 {
 	int rc;
 	time_t now = mosquitto_time();
 	if(!context->is_node)
 		return MOSQ_ERR_INVAL;
-	mosquitto__node *node = context->node;
+	struct mosquitto__node *node = context->node;
 	rc = net__try_connect(context, node->address, node->port, &context->sock, NULL, false);
 	if(rc == 0){
 		context->state = mosq_cs_new;
-		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Success in handshake with node: %s immediately.", node->name);
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER INIT] Success in handshake with node: %s immediately.", node->name);
 		node->handshaked = true;
 		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
-		send__connect(context, context->keepalive, false);
+		send__connect(context, context->keepalive, true);
 		context->next_pingreq = now;
 	}else if(rc < 0){
 		context->state = mosq_cs_connect_pending;
-		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Current cannot handshake with node: %s. reason:%s.", node->name, strerror(errno));
+		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Current cannot handshake with node: %s. reason:%s.", node->name, strerror(errno));
 		node->handshaked = false;
 		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
 	}else{
 		context->state = mosq_cs_disconnected;
 		assert(context->sock == INVALID_SOCKET);
 		node->handshaked = false;
-		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Error in handshake with node: %s. reason:%s.", node->name, strerror(errno));
+		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error in handshake with node: %s. reason:%s.", node->name, strerror(errno));
 	}
 	return rc;
 }
@@ -234,15 +228,15 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 {
 	int err, rc, reconnect_interval;
 	time_t now = mosquitto_time();
-	mosquitto__node *node = context->node;
-	socklen_t errlen = sizeof(err);/* getsockopt return -1 on solaris and return 0 on other os. */
+	struct mosquitto__node *node = context->node;
+	socklen_t errlen = sizeof(err);
+
 	rc = getsockopt(context->sock, SOL_SOCKET, SO_ERROR, &err, &errlen);
 	if(rc == 0 && err == 0){
 		context->state = mosq_cs_new;
-		log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Finally handshake with node: %s success.", node->name);
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER INIT] Finally handshake with node: %s success.", node->name);
 		node->handshaked = true;
 		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
-	    //log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Will send CONNECT with node: %s.", peer_context->node->name);
 		send__connect(context, context->keepalive, true);
 		context->next_pingreq = now;
 		node->connrefused_interval = 2;
@@ -250,18 +244,17 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 		return MOSQ_ERR_SUCCESS;
 	}else{
 		context->state = mosq_cs_disconnected;
-		//log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Still cannot handshake with node: %s. reason:%d. will close sockfd.", peer_context->node->name, err);
 		node->handshaked = false;
 		COMPAT_CLOSE(context->sock);
 		context->sock = INVALID_SOCKET;
 		switch(err){
 			case EINPROGRESS:
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s is busy, will reconnect later after %d seconds..", node->name, MOSQ_EINPROGRESS_INTERVAL);
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] node %s is busy, will reconnect later after %d seconds..", node->name, MOSQ_EINPROGRESS_INTERVAL);
 				node->attemp_reconnect = now + MOSQ_EINPROGRESS_INTERVAL;
 				context->state = mosq_cs_connect_pending;
 				return MOSQ_ERR_CONN_PENDING;
 			case EHOSTUNREACH:
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s OS maybe down or network unavailable, will reconnect later after %d seconds..", node->name, node->hostunreach_interval);
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] node %s OS maybe down or network unavailable, will reconnect later after %d seconds..", node->name, node->hostunreach_interval);
 				node->attemp_reconnect = now + node->hostunreach_interval;
 				if(node->hostunreach_interval*2 < MOSQ_NO_ROUTE_INTERVAL_MAX)
 					reconnect_interval = node->hostunreach_interval*2;
@@ -270,7 +263,7 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 				node->hostunreach_interval = reconnect_interval;
 				return MOSQ_ERR_CONN_LOST;
 			case ECONNREFUSED:
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] node: %s service maybe down, will reconnect later after %d seconds..", node->name, node->connrefused_interval);
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] node %s service maybe down, will reconnect later after %d seconds..", node->name, node->connrefused_interval);
 				node->attemp_reconnect = now + node->connrefused_interval;
 				if(node->connrefused_interval*2 < MOSQ_ECONNREFUSED_INTERVAL_MAX)
 					reconnect_interval = node->connrefused_interval*2;
@@ -279,7 +272,7 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 				node->connrefused_interval = reconnect_interval;
 				return MOSQ_ERR_CONN_REFUSED;
 			default:
-				log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] unknow reason while connect with node: %s, will try to reconnect after %d seconds..", node->name, MOSQ_ERR_INTERVAL);
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] unknow reason while connect with node %s, will try to reconnect after %d seconds..", node->name, MOSQ_ERR_INTERVAL);
 				node->attemp_reconnect = now + MOSQ_ERR_INTERVAL;
 				return MOSQ_ERR_NO_CONN;
 		}
@@ -323,7 +316,8 @@ int mosquitto_handle_retain(struct mosquitto_db *db)
 		}
 		tmp_cr = cr;
 		cr = cr->next;
-		if(prev_cr) prev_cr->next = cr;
+		if(prev_cr)
+			prev_cr->next = cr;
 		while(tmp_cr->retain_msgs){
 			db__message_insert_to_inflight(db, tmp_cr->client, tmp_cr->retain_msgs);
 			tmp_cr->retain_msgs = tmp_cr->retain_msgs->next;
@@ -339,40 +333,42 @@ int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context)
 	char notification_payload;
 	char *notification_topic;
 	char **topic_arr;
+	struct sub_table *sub_tbl, *tmp_tbl;
 
-	if(context->is_node){/* keep cluster status */
-		notification_topic_len = strlen(context->node->remote_clientid) + strlen("$SYS/broker/connection/cluster//state");
-		notification_topic = _mosquitto_malloc(sizeof(char)*(notification_topic_len+1));
-		if(!notification_topic) return MOSQ_ERR_NOMEM;
+	if(!context->is_node)
+		return MOSQ_ERR_SUCCESS;
 
-		snprintf(notification_topic, notification_topic_len+1, "$SYS/broker/connection/cluster/%s/state", context->node->remote_clientid);
-		notification_payload = '1';
-		db__messages_easy_queue(db, context, notification_topic, 1, 1, &notification_payload, 1);
-		mosquitto__free(notification_topic);
-	}
-	if(context->is_node){/* subscribe topic which has been subscribed only by local CLIENT */
-		struct topic_table *topic, *tmp_topic;
-		i = 0;
-		topic_arr = (char**)_mosquitto_malloc(MULTI_SUB_MAX_TOPICS * sizeof(char*));
-		HASH_ITER(hh, db->topics, topic, tmp_topic){/* FIXME: current only support topic SUBSCRIBE one by one */
-			assert(topic->topic_payload);
-			topic_arr[i++] = topic->topic_payload;
-			if(i == MULTI_SUB_MAX_TOPICS){
-				if(send__multi_subscribes(context, NULL, topic_arr, i)){
-					mosquitto__free(topic_arr);
-					return 1;
-				}
-				i = 0;
-			}
-		}
-		if(i > 0 && i < MULTI_SUB_MAX_TOPICS){
+	notification_topic_len = strlen(context->node->remote_clientid) + strlen("$SYS/broker/connection/cluster//state");
+	notification_topic = mosquitto__malloc(sizeof(char)*(notification_topic_len+1));
+	if(!notification_topic) return MOSQ_ERR_NOMEM;
+
+	snprintf(notification_topic, notification_topic_len+1, "$SYS/broker/connection/cluster/%s/state", context->node->remote_clientid);
+	notification_payload = '1';
+	db__messages_easy_queue(db, context, notification_topic, 1, 1, &notification_payload, 1);
+	mosquitto__free(notification_topic);
+
+	/* subscriptions which has been subscribed by local CLIENT */	
+	i = 0;
+	topic_arr = mosquitto__malloc(MULTI_SUB_MAX_TOPICS * sizeof(char*));
+	HASH_ITER(hh, db->db_subs, sub_tbl, tmp_tbl){
+		assert(sub_tbl->topic);
+		topic_arr[i++] = sub_tbl->topic;
+		if(i == MULTI_SUB_MAX_TOPICS){
 			if(send__multi_subscribes(context, NULL, topic_arr, i)){
 				mosquitto__free(topic_arr);
 				return 1;
 			}
+			i = 0;
 		}
-		mosquitto__free(topic_arr);
 	}
+	if(i > 0 && i < MULTI_SUB_MAX_TOPICS){
+		if(send__multi_subscribes(context, NULL, topic_arr, i)){
+			mosquitto__free(topic_arr);
+			return 1;
+		}
+	}
+	mosquitto__free(topic_arr);
+
 	return MOSQ_ERR_SUCCESS;
 }
 
@@ -380,86 +376,90 @@ int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *conte
 {
 	int i;
 	bool is_client_dup_sub = false;
-	struct topic_table *topic_iterm = NULL;
-	struct client_topic_table **new_client_topics = NULL, *tmp_client_topic = NULL;
+	struct sub_table *sub_tbl = NULL;
+	struct client_sub_table **new_client_subs = NULL, *tmp_client_sub = NULL;
 	struct mosquitto *node;
+	struct mosquitto_client_retain *cr, *tmpcr;
 
 	if(context->is_peer || IS_SYS_TOPIC(sub))
 		return MOSQ_ERR_SUCCESS;
 	context->is_db_dup_sub = false;
 	context->is_sys_topic = false;
 
-	/* for clients */
-	HASH_FIND(hh, db->topics, sub, strlen(sub), topic_iterm); /* find this topic inside DB */
-	if(topic_iterm){
-		topic_iterm->ref_cnt++;
+	HASH_FIND(hh, db->db_subs, sub, strlen(sub), sub_tbl);
+	if(sub_tbl){
+		sub_tbl->ref_cnt++;
 		context->is_db_dup_sub = true;
 	}else{/* add this new sub to db */
-		topic_iterm = mosquitto__malloc(sizeof(struct topic_table));
-		if(!topic_iterm){
+		sub_tbl = mosquitto__malloc(sizeof(struct sub_table));
+		if(!sub_tbl){
 			return MOSQ_ERR_NOMEM;
 		}
-		topic_iterm->topic_payload = mosquitto__strdup(sub);
-		topic_iterm->ref_cnt = 1;
-		HASH_ADD_KEYPTR(hh, db->topics, topic_iterm->topic_payload, strlen(topic_iterm->topic_payload), topic_iterm);
+		sub_tbl->topic = mosquitto__strdup(sub);
+		sub_tbl->ref_cnt = 1;
+		HASH_ADD_KEYPTR(hh, db->db_subs, sub_tbl->topic, strlen(sub_tbl->topic), sub_tbl);
 	}
-	for(i=0; i<context->client_topic_count; i++){ /* check for duplicate client sub */
-		if(context->client_topics[i] && 
-			!strcmp(context->client_topics[i]->topic_tbl->topic_payload, topic_iterm->topic_payload)){
-			context->client_topics[i]->sub_qos = qos; /* update QoS */
-			assert(context->is_db_dup_sub); /* a duplicate client sub must be in the db topics */
+
+	for(i=0; i<context->client_sub_count; i++){
+		if(context->client_subs[i] && 
+			!strcmp(context->client_subs[i]->sub_tbl->topic, sub_tbl->topic)){
+			context->client_subs[i]->sub_qos = qos;
+			assert(context->is_db_dup_sub);
 			is_client_dup_sub = true;
+			sub_tbl->ref_cnt--;
 			break;
 		}
 	}
 
-	if(!context->is_db_dup_sub) assert(!is_client_dup_sub);
+	if(!context->is_db_dup_sub)
+		assert(!is_client_dup_sub);
 
-	log__printf(NULL, MOSQ_LOG_INFO, "Client %s subscribe for topic: %s. This sub is %s for local broker, %s for client.", context->id, sub, context->is_db_dup_sub?"stale":"fresh", is_client_dup_sub?"stale":"fresh");
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Client %s subscribe for topic: %s. This subscription is %s for local broker, %s for client.", context->id, sub, context->is_db_dup_sub?"stale":"fresh", is_client_dup_sub?"stale":"fresh");
 
-	for(i=0; i<context->client_topic_count && !is_client_dup_sub; i++){ /* add this topic into client_topic */
-		if(!context->client_topics[i]){
-			context->client_topics[i]->topic_tbl = topic_iterm;
-			context->client_topics[i]->sub_qos = qos;
+	for(i=0; i<context->client_sub_count && !is_client_dup_sub; i++){
+		if(!context->client_subs[i]){
+			context->client_subs[i]->sub_tbl = sub_tbl;
+			context->client_subs[i]->sub_qos = qos;
 			break;
 		}
 	}
-	if(!is_client_dup_sub && i == context->client_topic_count){/* alloc new room for this fresh sub */
-		new_client_topics = mosquitto__realloc(context->client_topics, sizeof(struct client_topic_table *)*(context->client_topic_count + 1));
-		tmp_client_topic = _mosquitto_malloc(sizeof(struct client_topic_table));
-		if(!new_client_topics || !tmp_client_topic){
-			HASH_DELETE(hh,db->topics,topic_iterm);
-			mosquitto__free(topic_iterm->topic_payload);
-			mosquitto__free(topic_iterm);
+	if(!is_client_dup_sub && i == context->client_sub_count){
+		new_client_subs = mosquitto__realloc(context->client_subs, sizeof(struct client_sub_table *)*(context->client_sub_count + 1));
+		tmp_client_sub = mosquitto__malloc(sizeof(struct client_sub_table));
+		if(!new_client_subs || !tmp_client_sub){
+			HASH_DELETE(hh,db->db_subs,sub_tbl);
+			mosquitto__free(sub_tbl->topic);
+			mosquitto__free(sub_tbl);
 			return MOSQ_ERR_NOMEM;
 		}
-		tmp_client_topic->sub_qos = qos;
-		tmp_client_topic->topic_tbl = topic_iterm;
-		context->client_topics = new_client_topics;
-		context->client_topics[context->client_topic_count++] = tmp_client_topic;
+		tmp_client_sub->sub_qos = qos;
+		tmp_client_sub->sub_tbl = sub_tbl;
+		context->client_subs = new_client_subs;
+		context->client_subs[context->client_sub_count++] = tmp_client_sub;
 	}
-	 /* do we need to take a retain room for any of the client subs? */
-	if(!context->is_db_dup_sub){/* for duplicated sub, local should have the retain msg, so don't take care of them. */
-		struct mosquitto_client_retain *cr = mosquitto__calloc(1, sizeof(struct mosquitto_client_retain));
+
+	if(!context->is_db_dup_sub){
+		cr = mosquitto__calloc(1, sizeof(struct mosquitto_client_retain));
 		cr->client = context;
 		cr->next = NULL;
 		cr->retain_msgs = NULL;
-		cr->expect_send_time = mosquitto_time() + 1;
+		cr->expect_send_time = mosquitto_time() + db->cluster_retain_delay;
 		cr->sub_id = ++db->sub_id;
 		context->last_sub_id = cr->sub_id;
-
 		if(!db->retain_list){ /* add a client retain msg list into db */
 			db->retain_list = cr;
 		}else{
-			struct mosquitto_client_retain *tmp = db->retain_list;
-			while(tmp->next){
-				tmp = tmp->next;
+			tmpcr = db->retain_list;
+			while(tmpcr->next){
+				tmpcr = tmpcr->next;
 			}
-			tmp->next = cr;
+			tmpcr->next = cr;
 		}
 	}
-	/* retained flag would be propagete from remote node */
-	for(i=0; i<db->node_context_count && !context->is_db_dup_sub; i++){/* if this is a dupilicate db sub, then local must have the newest retained msg. */
+	/* retained flag will be propagete from remote node *
+	 * if this is a dupilicate db sub, then local must  *
+	 * have the newest retained msg.                    */
+	for(i=0; i<db->node_context_count && !context->is_db_dup_sub; i++){
 		node = db->node_contexts[i];
 		if(node && node->state == mosq_cs_connected){
 			send__private_subscribe(node, NULL, sub, qos, context->id, db->sub_id);
@@ -471,33 +471,33 @@ int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *conte
 
 int mosquitto_cluster_unsubscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub)
 {
-	if(context->is_peer || IS_SYS_TOPIC(sub))
-		return MOSQ_ERR_SUCCESS;
-
 	int i;
 	bool is_dup_unsub = true;
 	struct mosquitto *node;
-	struct topic_table *topic;
-	struct topic_table *client_topic;
+	struct sub_table *sub_tbl;
+	struct sub_table *client_sub;
+
+	if(context->is_peer || IS_SYS_TOPIC(sub))
+		return MOSQ_ERR_SUCCESS;
 
 	/* check for duplicate unsubscribe */
-	for(i=0; i<context->client_topic_count; i++){
-		if(context->client_topics[i] && !strcmp(sub, context->client_topics[i]->topic_tbl->topic_payload)){
-			client_topic = context->client_topics[i]->topic_tbl;
-			mosquitto__free(context->client_topics[i]);
-			context->client_topics[i] = NULL;
+	for(i=0; i<context->client_sub_count; i++){
+		if(context->client_subs[i] && !strcmp(sub, context->client_subs[i]->sub_tbl->topic)){
+			client_sub = context->client_subs[i]->sub_tbl;
+			mosquitto__free(context->client_subs[i]);
+			context->client_subs[i] = NULL;
 			is_dup_unsub = false;
 			break;
 		}
 	}
 
 	if(!is_dup_unsub){
-		HASH_FIND(hh, db->topics, sub, strlen(sub), topic);
-		if(topic){ /* this topic indeed subscribed before. */
-			assert(client_topic == topic);
-			topic->ref_cnt--;
-			if(topic->ref_cnt == 0){
-				log__printf(NULL, MOSQ_LOG_INFO, "Client %s unsubscribe for topic: %s. This unsub is valid to unsub in cluster, will send UNSUBSCRIBE to other nodes.", context->id, sub);
+		HASH_FIND(hh, db->db_subs, sub, strlen(sub), sub_tbl);
+		if(sub_tbl){
+			assert(client_sub == sub_tbl);
+			sub_tbl->ref_cnt--;
+			if(sub_tbl->ref_cnt == 0){
+				log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Client %s unsubscribe for topic: %s. This unsub is valid to unsub in cluster, will send UNSUBSCRIBE to other nodes.", context->id, sub);
 
 				for(i=0; i< db->node_context_count; i++){
 					node = db->node_contexts[i];
@@ -505,10 +505,10 @@ int mosquitto_cluster_unsubscribe(struct mosquitto_db *db, struct mosquitto *con
 						send__unsubscribe(node, NULL, sub);
 					}
 				}
-				HASH_DELETE(hh, db->topics, topic);
-				if(topic->topic_payload)
-					mosquitto__free(topic->topic_payload);
-				mosquitto__free(topic);
+				HASH_DELETE(hh, db->db_subs, sub_tbl);
+				if(sub_tbl->topic)
+					mosquitto__free(sub_tbl->topic);
+				mosquitto__free(sub_tbl);
 			}
 		}
 	}
@@ -518,49 +518,48 @@ int mosquitto_cluster_unsubscribe(struct mosquitto_db *db, struct mosquitto *con
 
 int mosquitto_cluster_client_disconnect(struct mosquitto_db *db, struct mosquitto *context)
 {
-	int i = 0, j = 0, k = 0;
-	char *unsub_topic = NULL;
-	struct topic_table *topic_tbl = NULL, *tmp_topic_tbl = NULL;
-	struct client_topic_table *client_topic = NULL;
-	struct mosquitto *node = NULL;
+	int i, j, k;
+	char *unsub_topic, **topic_arr;
+	struct sub_table *sub_tbl;
+	struct client_sub_table *client_sub;
+	struct mosquitto *node;
+
 	if(context->is_node || context->is_peer || context->save_subs || !context->clean_session)
 		return MOSQ_ERR_SUCCESS;
-	char **topic_arr = mosquitto__malloc(MULTI_SUB_MAX_TOPICS * sizeof(char*));
+
+	topic_arr = mosquitto__malloc(MULTI_SUB_MAX_TOPICS * sizeof(char*));
 	if(!topic_arr)
 		return MOSQ_ERR_NOMEM;
-	for(i = 0; i < context->client_topic_count; i++){
-		client_topic = context->client_topics[i];
-		if(!client_topic || !strncmp(client_topic->topic_tbl->topic_payload,"$SYS",4)) continue;
 
-		unsub_topic = client_topic->topic_tbl->topic_payload;
+	k = 0;
+	for(i = 0; i < context->client_sub_count; i++){
+		client_sub = context->client_subs[i];
+		if(!client_sub || IS_SYS_TOPIC(client_sub->sub_tbl->topic))
+			continue;
 
-		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLIENT_TOPIC_TABLE] Client %s disconnecting.. total(%d), subscribed topic(%d): %s.", context->id, context->client_topic_count, i, unsub_topic);
-		HASH_ITER(hh,db->topics, topic_tbl, tmp_topic_tbl){
-			log__printf(NULL, MOSQ_LOG_DEBUG, "[DB_TOPIC_TABLE] iter:%d topic: %s(ref_cnt:%d).", i, topic_tbl->topic_payload, topic_tbl->ref_cnt);
-		}
+		unsub_topic = client_sub->sub_tbl->topic;
 
-		topic_tbl = NULL;
-		HASH_FIND(hh, db->topics, unsub_topic, strlen(unsub_topic), topic_tbl);
-		if(topic_tbl){ /* delete this topic from topic table, pay attention to illegal UNSUBSCRIBE. */
-			assert(topic_tbl == client_topic->topic_tbl);
-			topic_tbl->ref_cnt--;
-			if(topic_tbl->ref_cnt == 0){
-				if(topic_tbl->topic_payload){
-					topic_arr[k++] = topic_tbl->topic_payload;
-					log__printf(NULL, MOSQ_LOG_DEBUG, "after k++, k: %d", k);
+		sub_tbl = NULL;
+		HASH_FIND(hh, db->db_subs, unsub_topic, strlen(unsub_topic), sub_tbl);
+		if(sub_tbl){ /* pay attention to illegal UNSUBSCRIBE. */
+			assert(sub_tbl == client_sub->sub_tbl);
+			sub_tbl->ref_cnt--;
+			if(sub_tbl->ref_cnt == 0){
+				if(sub_tbl->topic){
+					topic_arr[k++] = sub_tbl->topic;
 				}
-				HASH_DELETE(hh, db->topics, topic_tbl);
-				mosquitto__free(topic_tbl);
+				HASH_DELETE(hh, db->db_subs, sub_tbl);
+				mosquitto__free(sub_tbl);
 			}
 		}else{
-			log__printf(NULL, MOSQ_LOG_DEBUG, "client sub topic:%s not found in db",unsub_topic);
+			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Client sub topic:%s not found in db",unsub_topic);
 		}
-		mosquitto__free(client_topic);
+		mosquitto__free(client_sub);
 		if(k == MULTI_SUB_MAX_TOPICS){
 			for(j=0; j < db->node_context_count; j++){
 				node = db->node_contexts[j];
 				if(node && node->is_node && !node->is_peer && node->state == mosq_cs_connected && node->sock != INVALID_SOCKET){
-					send__multi_unsubscribe(node, NULL, topic_arr, MULTI_SUB_MAX_TOPICS);/* will memcpy topic_payload inside */
+					send__multi_unsubscribe(node, NULL, topic_arr, MULTI_SUB_MAX_TOPICS);
 				}
 			}
 			for(j=0; j<MULTI_SUB_MAX_TOPICS; j++){
@@ -570,24 +569,18 @@ int mosquitto_cluster_client_disconnect(struct mosquitto_db *db, struct mosquitt
 		}
 	}
 	if(k>0 && k<MULTI_SUB_MAX_TOPICS){
-		log__printf(NULL, MOSQ_LOG_DEBUG, "will send multi unsub, k: %d", k);
 		for(j=0; j < db->node_context_count; j++){
 			node = db->node_contexts[j];
 			if(node && node->is_node && !node->is_peer && node->state == mosq_cs_connected && node->sock != INVALID_SOCKET){
-				send__multi_unsubscribe(node, NULL, topic_arr, k);/* will memcpy topic_payload inside */
+				send__multi_unsubscribe(node, NULL, topic_arr, k);
 			}
 		}
 		for(j=0; j<k; j++){
-			_mosquitto_free(topic_arr[j]);
+			mosquitto__free(topic_arr[j]);
 		}
 	}
-	topic_tbl = NULL;
-	tmp_topic_tbl = NULL;
-	HASH_ITER(hh,db->topics, topic_tbl, tmp_topic_tbl){
-		log__printf(NULL, MOSQ_LOG_DEBUG, "[DB_TOPIC_TABLE] after send multi ubsub, db->topics: %s(ref_cnt:%d).", topic_tbl->topic_payload, topic_tbl->ref_cnt);
-	}
 	mosquitto__free(topic_arr);
-	mosquitto__free(context->client_topics);
+	mosquitto__free(context->client_subs);
 	return MOSQ_ERR_SUCCESS;
 }
 #endif

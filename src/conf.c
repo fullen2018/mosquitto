@@ -226,6 +226,8 @@ void config__init(struct mosquitto__config *config)
 #ifdef WITH_CLUSTER
 	config->nodes = NULL;
 	config->node_count = 0;
+	config->enable_cluster_session = true;
+	config->cluster_retain_delay = 2;
 #endif
 	config->auth_plugins = NULL;
 	config->verbose = false;
@@ -709,8 +711,9 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 #else
 					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
 #endif
-				}else if(!strcmp(token, "nodeaddress")){
+				}else if(!strcmp(token, "node_address")){
 #ifdef WITH_CLUSTER
+					if(reload) continue;
 					if(!cur_node){
 						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
 						return MOSQ_ERR_INVAL;
@@ -740,8 +743,9 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 #else
 					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
 #endif
-				}else if(!strcmp(token, "nodename")){
+				}else if(!strcmp(token, "node_name")){
 #ifdef WITH_CLUSTER
+					if(reload) continue;
 					token = strtok_r(NULL, " ", &saveptr);
 					if(token){
 						/* Check for existing bridge name. */
@@ -771,6 +775,66 @@ int config__read_file_core(struct mosquitto__config *config, bool reload, const 
 						log__printf(NULL, MOSQ_LOG_ERR, "Error: Empty node name in configuration.");
 						return MOSQ_ERR_INVAL;
 					}
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "node_keepalive")){
+#ifdef WITH_CLUSTER
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_int(&token, "message_size_limit", (int *)&cur_node->keepalive, saveptr)) return MOSQ_ERR_INVAL;
+					if(cur_node->keepalive < MOSQ_CLUSTER_KEEPALIVE){
+						log__printf(NULL, MOSQ_LOG_ERR, "Warning: node_keepalive value (%d) is too small, set to %d.", cur_node->keepalive, MOSQ_CLUSTER_KEEPALIVE);
+						cur_node->keepalive = MOSQ_CLUSTER_KEEPALIVE;
+					}
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "node_remote_username")){
+#ifdef WITH_CLUSTER
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_remote_username", &cur_node->remote_username, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "node_remote_password")){
+#ifdef WITH_CLUSTER
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_remote_password", &cur_node->remote_password, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "node_remote_clientid")){
+#ifdef WITH_CLUSTER
+					if(reload) continue;
+					if(!cur_node){
+						log__printf(NULL, MOSQ_LOG_ERR, "Error: Invalid cluster configuration.");
+						return MOSQ_ERR_INVAL;
+					}
+					if(conf__parse_string(&token, "node_remote_clientid", &cur_node->remote_clientid, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "enable_cluster_session")){
+#ifdef WITH_CLUSTER
+					if(conf__parse_bool(&token, "enable_cluster_session", &config->enable_cluster_session, saveptr)) return MOSQ_ERR_INVAL;
+#else
+					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
+#endif
+				}else if(!strcmp(token, "cluster_retain_delay")){
+#ifdef WITH_CLUSTER
+					if(conf__parse_int(&token, "enable_cluster_session", &config->cluster_retain_delay, saveptr)) return MOSQ_ERR_INVAL;
 #else
 					log__printf(NULL, MOSQ_LOG_WARNING, "Warning: cluster support not available.");
 #endif
@@ -2026,7 +2090,7 @@ static int config__check(struct mosquitto__config *config)
 
 #ifdef WITH_CLUSTER
 	int i, j;
-	struct mosquitto__node *node1, *node2;
+	struct mosquitto__node *node1, *node2, *new_nodes, *tmp_node;
 	char hostname[256];
 	int len;
 
@@ -2034,7 +2098,7 @@ static int config__check(struct mosquitto__config *config)
 	struct in_addr *tmpAddrPtr = NULL;
 	if(getifaddrs(&itfs)==-1)
 	{
-		log__printf(NULL, MOSQ_LOG_ERR, "Error: can not get local ip address. reason:%s", strerror(errno));
+		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Error: can not get local ip address. reason:%s", strerror(errno));
 	}
 
 	/* check and remove local nodes*/
@@ -2050,7 +2114,6 @@ static int config__check(struct mosquitto__config *config)
 				if(j == config->listener_count)
 					continue;
 				if(inet_addr(node1->address) == tmpAddrPtr->s_addr){
-					log__printf(NULL, MOSQ_LOG_ERR, "node: %s:%d is local address, ignore.", node1->address, node1->port);
 					mosquitto__free(node1->name);
 					mosquitto__free(node1->address);
 					mosquitto__free(node1->remote_clientid);
@@ -2060,17 +2123,17 @@ static int config__check(struct mosquitto__config *config)
 					mosquitto__free(node1->local_username);
 					mosquitto__free(node1->local_password);
 					config->node_count--;
-					struct mosquitto__node *nodes = mosquitto__malloc(config->node_count * sizeof(struct mosquitto__node));
-					struct mosquitto__node *tmp_ptr = nodes;
+					new_nodes = mosquitto__malloc(config->node_count * sizeof(struct mosquitto__node));
+					tmp_node = new_nodes;
 					int k;
 					for(k=0; k<config->node_count+1; k++){
 						if(k!=i){
-							memcpy(tmp_ptr, &config->nodes[k], sizeof(struct mosquitto__node));
-							tmp_ptr++;
+							memcpy(tmp_node, &config->nodes[k], sizeof(struct mosquitto__node));
+							tmp_node++;
 						}
 					}
 					mosquitto__free(config->nodes);
-					config->nodes = nodes;
+					config->nodes = new_nodes;
 				}
 			}
 		}
@@ -2112,21 +2175,13 @@ static int config__check(struct mosquitto__config *config)
 			node2 = &config->nodes[j];
 			if(!node2) continue;
 			if(!strcmp(node1->local_clientid, node2->local_clientid)){
-				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER]Error: node local_clientid "
+				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER] Error: node local_clientid "
 												"'%s' is not unique. Try changing or setting the "
 												"local_clientid value for one of the nodes.",
 												node1->local_clientid);
 				return MOSQ_ERR_INVAL;
 			}
 		}
-	}
-
-	log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER]totally %d remote nodes configured:", config->node_count);
-		
-	for(i=0; i<config->node_count; i++){
-		node1 = &config->nodes[i];
-		if(!node1) continue;
-		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER]Node(%d):%s, ip:%s, port:%d, local_clientid:%s, remote_clientid:%s", i+1, node1->name, node1->address, node1->port,node1->local_clientid,node1->remote_clientid);
 	}
 #endif
 

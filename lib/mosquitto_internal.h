@@ -47,6 +47,7 @@ Contributors:
 		typedef unsigned short uint16_t;
 		typedef unsigned int uint32_t;
 		typedef unsigned long long uint64_t;
+		typedef long long int64_t;
 #	else
 #		include <stdint.h>
 #	endif
@@ -170,6 +171,7 @@ struct mosquitto {
 	time_t last_msg_in;
 	time_t next_msg_out;
 	time_t ping_t;
+	time_t next_pingreq;
 	struct mosquitto__packet in_packet;
 	struct mosquitto__packet *current_out_packet;
 	struct mosquitto__packet *out_packet;
@@ -230,11 +232,11 @@ struct mosquitto {
 	bool is_sys_topic;
 	bool is_db_dup_sub;
 	uint16_t last_sub_id;
-	int client_topic_count;
+	int client_sub_count;
 	int64_t remote_time_offset;
 	char* last_sub_client_id;
 	struct mosquitto_db *db;
-	struct client_topic_table **client_topics;
+	struct client_sub_table **client_subs;
 #  ifdef WITH_WEBSOCKETS
 #    if defined(LWS_LIBRARY_VERSION_NUMBER)
 	struct lws *wsi;

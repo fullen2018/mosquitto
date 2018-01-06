@@ -38,6 +38,10 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 	uint8_t version;
 	char *clientid, *username, *password;
 	int headerlen;
+#ifdef WITH_CLUSTER
+	time_t now = mosquitto_time();
+	char tmp_time_str[9] = {0};
+#endif
 
 	assert(mosq);
 	assert(mosq->id);
@@ -99,7 +103,7 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 	}
 #ifdef WITH_CLUSTER
 	if(mosq->is_node)
-		payloadlen += 8;
+		payloadlen += 10;
 #endif
 	packet->command = CONNECT;
 	packet->remaining_length = headerlen+payloadlen;
@@ -157,6 +161,13 @@ int send__connect(struct mosquitto *mosq, uint16_t keepalive, bool clean_session
 	}
 
 	mosq->keepalive = keepalive;
+#ifdef WITH_CLUSTER
+	if(mosq->is_node){
+		mosq_time_to_hexstr((int64_t)now, tmp_time_str);
+		packet__write_string(packet, tmp_time_str, 8);
+		log__printf(mosq, MOSQ_LOG_DEBUG, "[CLUSTER] send local time to node: %s, localtime: %ld", mosq->node->name, now);
+	}
+#endif
 #ifdef WITH_BROKER
 # ifdef WITH_BRIDGE
 	log__printf(mosq, MOSQ_LOG_DEBUG, "Bridge %s sending CONNECT", clientid);

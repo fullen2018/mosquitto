@@ -21,6 +21,7 @@ Contributors:
 #include "mqtt3_protocol.h"
 #include "memory_mosq.h"
 #include "util_mosq.h"
+#include "packet_mosq.h"
 
 #ifdef WITH_CLUSTER
 int send__private_subscribe(struct mosquitto *context, int *mid, const char *topic, uint8_t topic_qos, char *client_id, uint16_t sub_id)
@@ -31,10 +32,8 @@ int send__private_subscribe(struct mosquitto *context, int *mid, const char *top
 	uint16_t local_mid;
 	int rc;
 
-	assert(context);
-	assert(topic);
-
-	if(context->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+	if(!context->is_node)
+		return MOSQ_ERR_INVAL;
 
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
 	if(!packet) return MOSQ_ERR_NOMEM;
@@ -52,7 +51,8 @@ int send__private_subscribe(struct mosquitto *context, int *mid, const char *top
 
 	/* Variable header */
 	local_mid = mosquitto__mid_generate(context);
-	if(mid) *mid = (int)local_mid;
+	if(mid)
+		*mid = (int)local_mid;
     /* 0. mid */
 	packet__write_uint16(packet, local_mid);
 	/* 1. topic */
@@ -64,30 +64,31 @@ int send__private_subscribe(struct mosquitto *context, int *mid, const char *top
 	/* 4. sub id */
 	packet__write_uint16(packet, sub_id);
 
-	//zhan jianhui debug
-    log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private subscribe to node:%s (sub_client_id:%s subid:%d topic:%s qos:%d mid:%d)",
-								      context->id, client_id, sub_id, topic, topic_qos, local_mid);
+    log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private subscribe to node:%s (client_id:%s subid:%d, q%d, m%d, '%s')",
+								      context->id, client_id, sub_id, topic_qos, local_mid, topic);
 
 	return packet__queue(context, packet);
 }
 
 int send__private_retain(struct mosquitto *context, char *remote_client_id, uint16_t sub_id, const char* topic, uint8_t qos, int mid, int64_t rcv_time, uint32_t payloadlen, const void *payload)
 {
-	struct mosquitto__packet *packet = NULL;
 	int packetlen;
 	int rc;
 	int64_t remote_rcv_time;
+	char tmp_time_str[9] = {0};
+	struct mosquitto__packet *packet = NULL;
 
-	assert(context && context->is_peer);
-	assert(topic);
-	if(context->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+	if(!context->is_peer || !topic)
+		return MOSQ_ERR_INVAL;
 
-	packetlen = 2/* 1. topic length */ + strlen(topic) + 1/* 2. QoS*/ + 
-		        2/* 4. remote client id length */ + strlen(remote_client_id) + 2/* 5. sub id */ +
-		        /* 6. original rcv time */ + 8 + payloadlen;
-	if(qos > 0) packetlen += 2; /* 3. message id */
+	packetlen = 2/* 1. topic */ + strlen(topic) + 1/* 2. QoS*/ + 
+		        2/* 4. remote client id */ + strlen(remote_client_id) + 2/* 5. sub id */ +
+		        2/* 6. original rcv time */ + 8 + payloadlen;
+	if(qos > 0) /* 3. message id */
+		packetlen += 2;
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
-	if(!packet) return MOSQ_ERR_NOMEM;
+	if(!packet)
+		return MOSQ_ERR_NOMEM;
 
 	packet->mid = mid;
 	packet->command = PRIVATE | PRIVATE_RETAIN;
@@ -118,28 +119,28 @@ int send__private_retain(struct mosquitto *context, char *remote_client_id, uint
 
 	/* 6. Retain Rcv Time */
 	remote_rcv_time = rcv_time + context->remote_time_offset;
-	packet__write_int64(packet, remote_rcv_time);
+	mosq_time_to_hexstr(remote_rcv_time, tmp_time_str);
+	packet__write_string(packet, tmp_time_str, 8);
 
 	/* 7. payload */
 	if(payloadlen){
 		packet__write_bytes(packet, payload, payloadlen);
 	}
 
-	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private retain to peer:%s (remote_client_id:%s subid:%d topic:%s qos:%d mid:%d remote_rcv_time:%ld payloadlen:%d, local_rcv_time:%ld, time_off_set:%ld)",
-		                              context->id, remote_client_id, sub_id, topic, qos, mid, remote_rcv_time, payloadlen, rcv_time, context->remote_time_offset);
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private retain to peer:%s (client_id:%s, subid:%d, q%d, m%d, '%s', ... (%ld bytes))",
+		                              context->id, remote_client_id, sub_id, qos, mid, topic, (long)payloadlen);
 
 	return packet__queue(context, packet);
 }
 
-int send__session_req(struct mosquitto *node, char *client_id, uint8_t clean_session)
+int send__session_req(struct mosquitto *context, char *client_id, uint8_t clean_session)
 {
 	struct mosquitto__packet *packet = NULL;
 	uint32_t packetlen;
 	int rc;
 
-	assert(node);
-	assert(client_id);
-	if(node->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+	if(!context->is_node)
+		return MOSQ_ERR_INVAL;
 
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
 	if(!packet) return MOSQ_ERR_NOMEM;
@@ -160,59 +161,68 @@ int send__session_req(struct mosquitto *node, char *client_id, uint8_t clean_ses
 	/* clean session */
 	packet__write_byte(packet, clean_session);
 
-	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending session request to node: %s, client_id: %s(%ld bytes)",
-										  node->id, client_id, strlen(client_id));
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending session request to node: %s for client_id: %s",
+										  context->id, client_id);
 
-	return packet__queue(node, packet);
+	return packet__queue(context, packet);
 }
 
 
-int send__session_resp(struct mosquitto *peer, char *client_id, struct mosquitto *client_context)
+int send__session_resp(struct mosquitto *context, char *client_id, struct mosquitto *client_context)
 {
-	struct mosquitto__packet *packet = NULL;
-	struct client_topic_table *client_sub = NULL;
-	struct mosquitto_client_msg *clientmsg = NULL;
-	struct mosquitto_msg_store *pubmsg = NULL;
-	uint8_t sub_qos = 0, flag;
-	uint16_t nrsubs = 0, nrpubs = 0;
-	uint32_t packetlen = 0;
+	uint8_t flag, state, dir, dup, qos;
+	uint16_t nrsubs = 0, nrpubs  =0;
+	uint32_t packetlen;
 	int rc, i, payload_len = 0;
+	struct mosquitto__packet *packet;
+	struct client_sub_table *client_sub;
+	struct mosquitto_client_msg *clientmsg;
+	struct mosquitto_msg_store *pubmsg ;
 
-	assert(peer);
-	assert(client_id);
-	if(peer->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
+	if(!context->is_peer)
+		return MOSQ_ERR_INVAL;
 
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
 	if(!packet) return MOSQ_ERR_NOMEM;
 
-	/* client id + last_mid + num of subs + sub1(topic/qos) + sub2 + ... + num of pubs + pub1(topic/qos/mid/payload) + pub2(topic/qos/mid/payload) + ... */
+	/* client id + last_mid + 
+	   num of subs + sub1(topic/qos) + sub2(...) + ... + 
+	   num of pubs + pub1(topic/flag/mid/payload) + pub2(...) + ... */
 	packetlen = 2 + strlen(client_id) + 2 + 2 + 2;
 
 	packet->command = PRIVATE | SESSION_RESP;
 
 	/* caculate total subs length and num of subs */
-	for(i = 0; i < client_context->client_topic_count; i++){
-		client_sub = client_context->client_topics[i];
-		if(client_sub){   /* topic_len + topic + qos */
-			payload_len += (2 + strlen(client_sub->topic_tbl->topic_payload)+ 1);
+	for(i = 0; i < client_context->client_sub_count; i++){
+		client_sub = client_context->client_subs[i];
+		if(client_sub){
+			payload_len += (2 + strlen(client_sub->sub_tbl->topic)+ 1);
 			nrsubs++;
 		}
 	}
 
-	/* caculate pubs length and num of pubs */
-	clientmsg = client_context->msgs;
+	clientmsg = client_context->inflight_msgs;
 	while(clientmsg){
 		if(clientmsg->qos > 0 && clientmsg->state != mosq_ms_invalid && clientmsg->state != mosq_ms_publish_qos0 && !clientmsg->retain){
 			pubmsg = clientmsg->store;
-			/* topic_len + topic + flag(state|dir|dup|qos) + mid + payloadlen + payload */
 			payload_len += 2 + strlen(pubmsg->topic) + 1 + 2 + 4 + pubmsg->payloadlen;
 			nrpubs++;
 		}
 		clientmsg = clientmsg->next;
 	}
 
-	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] sending SESSION RESP to peer: %s for client: %s, mid:%d, total %d SUBs, %d PUBs",
-										  peer->id, client_context->id, client_context->last_mid, nrsubs, nrpubs);
+	clientmsg = client_context->queued_msgs;
+	while(clientmsg){
+		if(clientmsg->qos > 0 && clientmsg->state != mosq_ms_invalid && clientmsg->state != mosq_ms_publish_qos0 && !clientmsg->retain){
+			pubmsg = clientmsg->store;
+			payload_len += 2 + strlen(pubmsg->topic) + 1 + 2 + 4 + pubmsg->payloadlen;
+			nrpubs++;
+		}
+		clientmsg = clientmsg->next;
+	}
+
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending session response to peer: %s for client: %s, mid:%d, total %d SUBs, %d PUBs",
+										  context->id, client_context->id, client_context->last_mid, nrsubs, nrpubs);
 	packet->remaining_length = packetlen + payload_len;
 
 	rc = packet__alloc(packet);
@@ -230,45 +240,42 @@ int send__session_resp(struct mosquitto *peer, char *client_id, struct mosquitto
 	/* num of subs */
 	packet__write_uint16(packet, nrsubs);
 
-	/* sub1, sub2, ... */
-	for(i = 0; i < client_context->client_topic_count; i++){
-		client_sub = client_context->client_topics[i];
+	/* subs */
+	for(i = 0; i < client_context->client_sub_count; i++){
+		client_sub = client_context->client_subs[i];
 		if(client_sub){
-			packet__write_string(packet, client_sub->topic_tbl->topic_payload, strlen(client_sub->topic_tbl->topic_payload));
+			packet__write_string(packet, client_sub->sub_tbl->topic, strlen(client_sub->sub_tbl->topic));
 			packet__write_byte(packet, client_sub->sub_qos);
 
-			char *tmp_sub_topic = mosquitto__malloc(strlen(client_sub->topic_tbl->topic_payload) + 1);
-			memcpy(tmp_sub_topic, client_sub->topic_tbl->topic_payload, strlen(client_sub->topic_tbl->topic_payload));
-			tmp_sub_topic[strlen(client_sub->topic_tbl->topic_payload)]='\0';
-			log__printf(NULL, MOSQ_LOG_DEBUG, "\tSESSION RESP(SUBs): topic:%s(%ld bytes) qos:%d(out)",
-										  tmp_sub_topic,strlen(tmp_sub_topic), sub_qos);
-			mosquitto__free(tmp_sub_topic);
+			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER]\tSUBs: topic:%s(%ld bytes) qos:%d(out)",
+										  client_sub->sub_tbl->topic, strlen(client_sub->sub_tbl->topic), client_sub->sub_qos);
 		}
 	}
 
 	/* num of pubs */
 	packet__write_uint16(packet, nrpubs);
 
-	/* pub1, pub2, ... */
-	clientmsg = client_context->msgs;
+	/* pubs */
+	clientmsg = client_context->inflight_msgs;
 	while(clientmsg){
 		if(clientmsg->qos > 0 && clientmsg->state != mosq_ms_invalid && clientmsg->state != mosq_ms_publish_qos0 && !clientmsg->retain){
 			pubmsg = clientmsg->store;
 			packet__write_string(packet, pubmsg->topic, strlen(pubmsg->topic));
 			/* flag = (state|dir|dup|qos) */
-			flag = (((uint8_t)clientmsg->state)&0x0F << 4) + (((uint8_t)clientmsg->direction)&0x01 << 3)
-					+ (((uint8_t)clientmsg->dup)&0x01 << 2) + (((uint8_t)clientmsg->state)&0x03);
+			state = (uint8_t)clientmsg->state;
+			dir = (uint8_t)clientmsg->direction;
+			dup = (uint8_t)clientmsg->dup;
+			qos = (uint8_t)clientmsg->qos;
+			flag = (state<<4) + (dir<<3) + (dup<<2) + qos;
+
 			packet__write_byte(packet, flag);
 			packet__write_uint16(packet, clientmsg->mid);
 			packet__write_uint32(packet, pubmsg->payloadlen);
-			packet__write_string(packet, UHPA_ACCESS_PAYLOAD(pubmsg), pubmsg->payloadlen);
 
-			char *tmp_payload = mosquitto__malloc(pubmsg->payloadlen + 1);
-			memcpy(tmp_payload, pubmsg->payload, pubmsg->payloadlen);
-			tmp_payload[pubmsg->payloadlen] = '\0';
-			log__printf(NULL, MOSQ_LOG_DEBUG, "\tSESSION RESP(PUBs): topic:%s flag(state|dir|dup|qos):0x%02X mid:%d payload:%s(out)",
-										  pubmsg->topic, flag, clientmsg->mid, tmp_payload);
-			mosquitto__free(tmp_payload);
+			packet__write_bytes(packet, UHPA_ACCESS_PAYLOAD(pubmsg), pubmsg->payloadlen);
+
+			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER]\tPUBs (d%d, q%d, s%d, m%d, '%s', ... (%ld bytes))(out)",
+										  		dup, qos, state, clientmsg->mid, pubmsg->topic, (long)pubmsg->payloadlen);
 
 			db__msg_store_deref(client_context->db, &pubmsg);
 		}
@@ -281,50 +288,48 @@ int send__session_resp(struct mosquitto *peer, char *client_id, struct mosquitto
 		if(clientmsg->qos > 0 && clientmsg->state != mosq_ms_invalid && clientmsg->state != mosq_ms_publish_qos0 && !clientmsg->retain){
 			pubmsg = clientmsg->store;
 			packet__write_string(packet, pubmsg->topic, strlen(pubmsg->topic));
-			flag = (((uint8_t)clientmsg->state)&0x0F << 4) + (((uint8_t)clientmsg->direction)&0x01 << 3)
-				+ (((uint8_t)clientmsg->dup)&0x01 << 2) + (((uint8_t)clientmsg->state)&0x03);
+			state = (uint8_t)clientmsg->state;
+			dir = (uint8_t)clientmsg->direction;
+			dup = (uint8_t)clientmsg->dup;
+			qos = (uint8_t)clientmsg->qos;
+			flag = (state<<4) + (dir<<3) + (dup<<2) + qos;
+
 			packet__write_byte(packet, flag);
 			packet__write_uint16(packet, clientmsg->mid);
 			packet__write_uint32(packet, pubmsg->payloadlen);
-			packet__write_string(packet, UHPA_ACCESS_PAYLOAD(pubmsg), pubmsg->payloadlen);
+			packet__write_bytes(packet, UHPA_ACCESS_PAYLOAD(pubmsg), pubmsg->payloadlen);
 
-			char *tmp_payload = mosquitto__malloc(pubmsg->payloadlen + 1);
-			memcpy(tmp_payload, pubmsg->payload.ptr, pubmsg->payloadlen);
-			tmp_payload[pubmsg->payloadlen] = '\0';
-			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] SESSION RESP(PUBS): topic:%s flag(state|dir|dup|qos):0x%02X mid:%d payload:%s(out)",
-												pubmsg->topic, flag, clientmsg->mid, tmp_payload);
-			mosquitto__free(tmp_payload);
+			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER]\tPubs (d%d, q%d, s%d, m%d, '%s', ... (%ld bytes))(out)",
+										  		dup, qos, state, clientmsg->mid, pubmsg->topic, (long)pubmsg->payloadlen);
 
 			db__msg_store_deref(client_context->db, &pubmsg);
 		}
 		clientmsg = clientmsg->next;
 	}
 
-	return packet__queue(peer, packet);
+	return packet__queue(context, packet);
 }
 
 int send__multi_subscribes(struct mosquitto *context, int *mid, char **topic_arr, int topic_arr_len)
 {
-	/* stub sub qos with 0 inside cluster */
-	struct mosquitto__packet *packet = NULL;
-	uint32_t packetlen;
-	uint16_t local_mid;
 	int rc, i;
+	uint16_t local_mid;
+	uint32_t packetlen;
+	struct mosquitto__packet *packet;
 
-	assert(context);
-	assert(topic_arr);
-
-	if(!topic_arr_len) return MOSQ_ERR_SUCCESS;
+	if(!context->is_node || !topic_arr || !topic_arr_len)
+		return MOSQ_ERR_INVAL;
 
 	packetlen = 2; /* mid */
 
-	for(i=0; i<topic_arr_len; i++){/* topic_len + topic + qos */
+	for(i=0; i<topic_arr_len; i++){/* topic + qos */
 		packetlen += (2+strlen(topic_arr[i])+1);
 	}
-    
+
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
-	if(!packet) return MOSQ_ERR_NOMEM;
-    /* mid + (topic_len + topic + qos) * nrtopics */
+	
+	if(!packet)
+		return MOSQ_ERR_NOMEM;
 
 	packet->command = SUBSCRIBE | (1<<1);
 	packet->remaining_length = packetlen;
@@ -336,18 +341,19 @@ int send__multi_subscribes(struct mosquitto *context, int *mid, char **topic_arr
 
 	/* Variable header */
 	local_mid = mosquitto__mid_generate(context);
-	if(mid) *mid = (int)local_mid;
+	if(mid)
+		*mid = (int)local_mid;
 	packet__write_uint16(packet, local_mid);
 
 	/* Payload */
 	for(i=0; i<topic_arr_len; i++){
 		packet__write_string(packet, topic_arr[i], strlen(topic_arr[i]));
-		packet__write_byte(packet, 0); /* stub qos to 0 */
+		packet__write_byte(packet, 0);
 	}
 
 	log__printf(context, MOSQ_LOG_DEBUG, "[CLUSTER] sending SUBSCRIBE to node: %s (nrTopics:%d,Mid: %d)", context->id, topic_arr_len, local_mid);
 	for(i=0; i<topic_arr_len; i++){
-		log__printf(context, MOSQ_LOG_DEBUG, "\tSUBSCRIBE topic[%d]: %s", i, topic_arr[i]);
+		log__printf(context, MOSQ_LOG_DEBUG, "[CLUSTER]\tSUBSCRIBE topic[%d]: %s", i, topic_arr[i]);
 	}
 
 	return packet__queue(context, packet);
@@ -355,21 +361,20 @@ int send__multi_subscribes(struct mosquitto *context, int *mid, char **topic_arr
 
 int send__multi_unsubscribe(struct mosquitto *context, int *mid, char **topic_arr, int topic_arr_len)
 {
-	struct mosquitto__packet *packet = NULL;
-	uint32_t packetlen;
-	uint16_t local_mid;
 	int rc, i;
+	uint16_t local_mid;
+	uint32_t packetlen;
+	struct mosquitto__packet *packet;
 
-	assert(context);
-	assert(topic_arr);
-	if(!topic_arr_len) return MOSQ_ERR_SUCCESS;
+	if(!context->is_node || !topic_arr || !topic_arr_len)
+		return MOSQ_ERR_INVAL;
 
 	packet = mosquitto__calloc(1, sizeof(struct mosquitto__packet));
 	if(!packet) return MOSQ_ERR_NOMEM;
 
 	packetlen = 2;
 
-	for(i=0; i<topic_arr_len; i++){/* topic_len + topic + qos */
+	for(i=0; i<topic_arr_len; i++){
 		packetlen += (2+strlen(topic_arr[i]));
 	}
 
@@ -392,7 +397,7 @@ int send__multi_unsubscribe(struct mosquitto *context, int *mid, char **topic_ar
 
 	log__printf(context, MOSQ_LOG_DEBUG, "[CLUSTER] sending MULTI UNSUBSCRIBE to node: %s (nrTopics:%d,Mid: %d)", context->id, topic_arr_len, local_mid);
 	for(i=0; i<topic_arr_len; i++){
-		log__printf(context, MOSQ_LOG_DEBUG, "\tMULTI UNSUBSCRIBE topic[%d]: %s", i, topic_arr[i]);
+		log__printf(context, MOSQ_LOG_DEBUG, "[CLUSTER]\tMULTI UNSUBSCRIBE topic[%d]: %s", i, topic_arr[i]);
 	}
 
 	return packet__queue(context, packet);

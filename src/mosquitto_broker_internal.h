@@ -262,6 +262,8 @@ struct mosquitto__config {
 	struct mosquitto_db *db;
 	struct mosquitto__node *nodes;
 	int node_count;
+	int cluster_retain_delay;
+	bool enable_cluster_session;
 #endif
 	struct mosquitto__auth_plugin_config *auth_plugins;
 	int auth_plugin_count;
@@ -305,6 +307,10 @@ struct mosquitto_msg_store{
 	uint16_t mid;
 	uint8_t qos;
 	bool retain;
+#ifdef WITH_CLUSTER
+	bool from_node;
+	time_t rcv_time;
+#endif
 };
 
 struct mosquitto_client_msg{
@@ -384,6 +390,12 @@ struct mosquitto__auth_plugin{
 };
 
 #ifdef WITH_CLUSTER
+#define PROTOCOL_MASK 0x07
+#else
+#define PROTOCOL_MASK 0x7F
+#endif
+
+#ifdef WITH_CLUSTER
 #define MOSQ_NODE_MASK 0xF0
 #define MOSQ_NODE_MEET 0x40
 #define MOSQ_NODE_SEND_SUB 0xC0
@@ -397,50 +409,18 @@ struct mosquitto__auth_plugin{
 #define MOSQ_CHECKPINGRESP_INTERVAL 5
 #define MOSQ_CLUSTER_KEEPALIVE 10
 
+#define MOSQ_CLUSTER_RETAIN_DELAY 2
+
 #define MULTI_SUB_MAX_TOPICS 30 /* 1460/30 = 48(per topic length), try to send them inside one IP packet. */
 
-struct _mqtt3_node{
-	char *name;
-	char *address;
-	int port;
-	bool clean_session;
-	int keepalive;
-	enum _mosquitto_protocol protocol_version;
-	bool private_accepted;
-	char *remote_clientid;
-	char *remote_username;
-	char *remote_password;
-	char *local_clientid;
-	char *local_username;
-	char *local_password;
-#ifdef WITH_TLS
-	char *tls_cafile;
-	char *tls_capath;
-	char *tls_certfile;
-	char *tls_keyfile;
-	bool tls_insecure;
-	char *tls_version;
-#ifdef REAL_WITH_TLS_PSK
-	char *tls_psk_identity;
-	char *tls_psk;
-#endif
-#endif
-	struct mosquitto *context;
-	time_t attemp_reconnect;
-	time_t check_handshake;
-	int hostunreach_interval;
-	int connrefused_interval;
-	bool handshaked;
-};
-
-struct topic_table{
-	char *topic_payload;
+struct sub_table{
+	char *topic;
 	int ref_cnt;
 	UT_hash_handle hh;
 };
 
-struct client_topic_table{
-	struct topic_table *topic_tbl;
+struct client_sub_table{
+	struct sub_table *sub_tbl;
 	uint8_t sub_qos;
 };
 
@@ -479,6 +459,15 @@ struct mosquitto_db{
 	struct mosquitto_msg_store_load *msg_store_load;
 #ifdef WITH_BRIDGE
 	int bridge_count;
+#endif
+#ifdef WITH_CLUSTER
+	bool enable_cluster_session;
+	uint16_t sub_id;
+	int node_context_count;
+	int cluster_retain_delay;
+	struct mosquitto **node_contexts;
+	struct sub_table *db_subs;
+	struct mosquitto_client_retain *retain_list;
 #endif
 	int msg_store_count;
 	unsigned long msg_store_bytes;
@@ -749,7 +738,7 @@ void node__disconnect(struct mosquitto_db *db, struct mosquitto *context);
 int node__new(struct mosquitto_db *db, struct mosquitto__node *node);
 void node__cleanup(struct mosquitto_db *db, struct mosquitto *context);
 void node__packet_cleanup(struct mosquitto *context);
-int node__try_connect(mosquitto_db *db, mosquitto *context);
+int node__try_connect(struct mosquitto_db *db, struct mosquitto *context);
 int node__check_connect(struct mosquitto_db *db, struct mosquitto *context);
 int mosquitto_handle_retain(struct mosquitto_db *db);
 int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context);
@@ -761,7 +750,9 @@ int handle__private_subscribe(struct mosquitto_db *db, struct mosquitto *context
 int handle__private_retain(struct mosquitto_db *db, struct mosquitto *context);
 int handle__session_req(struct mosquitto_db *db, struct mosquitto *context);
 int handle__session_resp(struct mosquitto_db *db, struct mosquitto *context);
-
+int db__message_insert_into_retain_queue(struct mosquitto_db *db, struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, int qos, bool retain, struct mosquitto_msg_store *stored, uint16_t sub_id);
+int db__message_insert_to_inflight(struct mosquitto_db *db, struct mosquitto *client, struct mosquitto_client_msg *msg);
+int db__message_session_pub_insert(struct mosquitto_db *db, struct mosquitto *client_context, uint16_t pub_mid, enum mosquitto_msg_state pub_state, enum mosquitto_msg_direction pub_dir, uint8_t pub_dup, uint8_t pub_qos, bool retain, struct mosquitto_msg_store *stored);
 #endif
 
 void do_disconnect(struct mosquitto_db *db, struct mosquitto *context);

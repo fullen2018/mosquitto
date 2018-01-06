@@ -38,11 +38,13 @@ void packet__write_string(struct mosquitto__packet *packet, const char *str, uin
 void packet__write_uint16(struct mosquitto__packet *packet, uint16_t word);
 
 #ifdef WITH_CLUSTER
-int packet__read_int64(struct _mosquitto_packet *packet, int64_t *qword);
-int packet__read_uint32(struct _mosquitto_packet *packet, uint32_t *dword);
+int packet__read_int64(struct mosquitto__packet *packet, int64_t *qword);
+int packet__read_uint32(struct mosquitto__packet *packet, uint32_t *dword);
 
-void packet__write_int64(struct _mosquitto_packet *packet, int64_t qword);
-void packet__write_uint32(struct _mosquitto_packet *packet, uint32_t dword);
+void packet__write_int64(struct mosquitto__packet *packet, int64_t qword);
+void packet__write_uint32(struct mosquitto__packet *packet, uint32_t dword);
+void mosq_hexstr_to_time(int64_t *time, char* string);
+void mosq_time_to_hexstr(int64_t time, char* string);
 #endif
 
 int packet__write(struct mosquitto *mosq);

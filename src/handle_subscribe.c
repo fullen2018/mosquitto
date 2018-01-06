@@ -37,10 +37,6 @@ int handle__subscribe(struct mosquitto_db *db, struct mosquitto *context)
 	uint32_t payloadlen = 0;
 	int len;
 	char *sub_mount;
-#ifdef WITH_CLUSTER
-	int i;
-	struct mosquitto *node;
-#endif
 
 	if(!context) return MOSQ_ERR_INVAL;
 #ifdef WITH_CLUSTER

@@ -249,29 +249,40 @@ void packet__write_uint16(struct mosquitto__packet *packet, uint16_t word)
 }
 
 #ifdef WITH_CLUSTER
-void packet__write_int64(struct mosquitto__packet *packet, int64_t qword)
-{	
-	packet__write_byte(packet, (uint8_t)(qword & 0xFF00000000000000 >> 56));
-	packet__write_byte(packet, (uint8_t)(qword & 0x00FF000000000000 >> 48));
-	packet__write_byte(packet, (uint8_t)(qword & 0x0000FF0000000000 >> 40));
-	packet__write_byte(packet, (uint8_t)(qword & 0x000000FF00000000 >> 32));
-	packet__write_byte(packet, (uint8_t)(qword & 0x00000000FF000000 >> 24));
-	packet__write_byte(packet, (uint8_t)(qword & 0x0000000000FF0000 >> 16));
-	packet__write_byte(packet, (uint8_t)(qword & 0x000000000000FF00 >> 8));
-	packet__write_byte(packet, (uint8_t)(qword & 0x00000000000000FF));
+void mosq_time_to_hexstr(int64_t time, char* string)
+{
+	uint32_t i = 0x12345678;
+	uint32_t idx;
+	uint8_t *c = (uint8_t *)&i;
+	int64_t tmp = time;
+	if(c[0] == 0x12){//big endien
+		for(idx = 0; idx < 8; idx++){
+			string[idx] = (char)((tmp >> ((7-idx)*8)) & 0xFF);
+		}
+	}else{
+		for(idx = 0; idx < 8; idx++){
+			string[idx] = (char)((tmp >> ((idx)*8)) & 0xFF);
+		}
+	}
 }
 
-int packet__read_int64(struct mosquitto__packet *packet, int64_t *qword)
+void mosq_hexstr_to_time(int64_t *time, char* string)
 {
-	assert(packet);
-	if(packet->pos+8 > packet->remaining_length) return MOSQ_ERR_PROTOCOL;
-	int i;
-	*qword = 0;
-	for(i=1; i<=8; i++){
-		*qword += (int64_t)((uint8_t)(packet->payload[packet->pos]&0xFF)>>(8*(8-i)));
-		packet->pos++;
+	uint32_t i = 0x12345678;
+	uint32_t idx;
+	uint8_t *c = (uint8_t *)&i;
+	*time = 0;
+	long int tmp_time = 0;
+	if(c[0] == 0x12){//big endien
+		for(idx = 0; idx < 8; idx++){
+			tmp_time |= (uint8_t)string[idx] << ((7-idx)*8);
+		}
+	}else{
+		for(idx = 0; idx < 8; idx++){
+			tmp_time |= (uint8_t)string[idx] << (idx*8);
+		}
 	}
-	return MOSQ_ERR_SUCCESS;
+	*time = tmp_time;
 }
 
 void packet__write_uint32(struct mosquitto__packet *packet, uint32_t dword)
@@ -458,7 +469,7 @@ int packet__read(struct mosquitto *mosq)
 #ifdef WITH_BROKER
 			G_BYTES_RECEIVED_INC(1);
 			/* Clients must send CONNECT as their first command. */
-			if(!(mosq->bridge) && mosq->state == mosq_cs_new && (byte&0xF0) != CONNECT) return MOSQ_ERR_PROTOCOL;
+			if(!(mosq->bridge || mosq->is_node) && mosq->state == mosq_cs_new && (byte&0xF0) != CONNECT) return MOSQ_ERR_PROTOCOL;
 #endif
 		}else{
 			if(read_length == 0) return MOSQ_ERR_CONN_LOST; /* EOF */

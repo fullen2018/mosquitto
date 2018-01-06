@@ -1471,6 +1471,81 @@ topic clients/total in 0 test/mosquitto/org $SYS/broker/
 	</refsect1>
 
 	<refsect1>
+		<title>Configuring Cluster</title>
+		<para>Multiple brokers (all autonomous without a leader) can be configured
+		using the following variables.</para>
+		<para>Brokers cannot currently be reloaded on reload signal.</para>
+		<variablelist>
+			<varlistentry>
+				<term><option>node_name</option> <replaceable>name</replaceable></term>
+				<listitem>
+					<para>Specify a name for each brokers, the name would take
+						as a context id for each brokers. This must be given for each cluster node. </para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>node_address</option> <replaceable>address:port</replaceable></term>
+				<listitem>
+					<para>Specify a remote broker's address and port.
+						Inorder to support a unified configure file for all
+						the brokers inside the cluster, a node_address with
+						local address and port is valid, and would be ingnore
+						after configuration.
+						This must be given for each cluster node. </para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>node_keepalive</option> <replaceable>seconds</replaceable></term>
+				<listitem>
+					<para>Specify the keepalive inside CONNECT messages to each other brokers.
+						too small value would make too much noise messages inside the cluster,
+						so 10 seconds is the min value.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>node_remote_username</option> <replaceable>username</replaceable></term>
+				<listitem>
+					<para>Specify username inside CONNECT messages to each other brokers.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>node_remote_password</option> <replaceable>password</replaceable></term>
+				<listitem>
+					<para>Specify password inside CONNECT messages to each other brokers.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>node_remote_clientid</option> <replaceable>password</replaceable></term>
+				<listitem>
+					<para>Specify client id inside CONNECT messages to each other brokers.
+						default value is local hostname.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>enable_cluster_session</option> [ true | false ]</term>
+				<listitem>
+					<para>cluster session will make a client as unique inside the cluster,
+						and if clean_session set to false, the client would receive it's
+						previouse sessions such as subscription and uncomplete publish
+						messages with QoS>0 inside the cluster. Setting
+						<option>enable_cluster_session</option> to
+						<replaceable>false</replaceable> will disable cluster session
+						feature. Defaults to
+						<replaceable>true</replaceable>.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>cluster_retain_delay</option> <replaceable>seconds</replaceable></term>
+				<listitem>
+					<para>Set a delay window for all remote retain messages which possible exits
+						inside the cluster for each subscription. 2 seconds is a default value
+						under intranet environment.</para>
+				</listitem>
+			</varlistentry>
+		</variablelist>
+	</refsect1>
+
+	<refsect1>
 		<title>Files</title>
 		<para>mosquitto.conf</para>
 	</refsect1>

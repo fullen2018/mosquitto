@@ -94,7 +94,7 @@ int handle__unsubscribe(struct mosquitto_db *db, struct mosquitto *context)
 			log__printf(NULL, MOSQ_LOG_DEBUG, "\t%s", sub);
 #ifdef WITH_CLUSTER
 			if(!context->is_peer && !IS_SYS_TOPIC(sub)){
-				if(mosquitto_cluster_unsubscribe(db, context, sub)
+				if(mosquitto_cluster_unsubscribe(db, context, sub))
 					return 1;
 			}
 #endif

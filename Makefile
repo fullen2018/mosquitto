@@ -23,6 +23,10 @@ ifeq ($(UNAME),Darwin)
 	$(error Please compile using CMake on Mac OS X)
 endif
 
+ifeq ($(WITH_CLUSTER)_$(WITH_BRIDGE),yes_yes)
+	$(error Please do not compile with both broker and bridge)
+endif
+
 	set -e; for d in ${DIRS}; do $(MAKE) -C $${d}; done
 
 clean :

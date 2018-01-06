@@ -195,6 +195,18 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 #endif
 #endif
 
+#ifdef WITH_CLUSTER
+	log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] totally %d remote nodes configured:", db->config->node_count);
+	for(i=0; i<db->config->node_count; i++){
+		node = &db->config->nodes[i];
+		if(!node) continue;
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] Node(%d):%s, ip:%s, port:%d, local_clientid:%s, remote_clientid:%s, remote_username:%s, remote_password:%s, keepalive:%d", 
+										i+1, node->name, node->address, node->port,node->local_clientid,node->remote_clientid, node->remote_username, node->remote_password, node->keepalive);
+	}
+
+	
+#endif
+
 	while(run){
 		context__free_disused(db);
 #ifdef WITH_SYS_TREE
@@ -229,8 +241,9 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 			if(!node_context)
 				continue;
 			if(node_context->state == mosq_cs_connected && node_context->node->handshaked &&
-				node_context->ping_t && now - node_context->ping_t >= MOSQ_CHECKPINGRESP_INTERVAL){
-			    log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Remote node(OS): %s maybe crashed, close node and reconnect later.", node_context->node->name);
+				node_context->ping_t && now - node_context->ping_t >= (time_t)(node_context->keepalive)*3/2){
+			    log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Remote node(OS): %s maybe crashed, close node and reconnect later.",
+												node_context->node->name);
 				node_context->ping_t = 0;
 				node_context->node->handshaked = false;
 				do_disconnect(db, node_context);
@@ -239,7 +252,8 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 			if(node_context->state == mosq_cs_connected && node_context->node->handshaked && 
 				node_context->keepalive && (now >= node_context->next_pingreq)){
 				if(send__pingreq(node_context)){
-					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Failed in send PINGREQ with node: %s, close node and reconnect later.", node_context->node->name);
+					log__printf(NULL, MOSQ_LOG_ERR, "[HANDSHAKE] Failed in send PINGREQ with node: %s, close node and reconnect later.",
+													node_context->node->name);
 					do_disconnect(db, node_context);
 				}
 				node_context->next_pingreq += node_context->keepalive;
@@ -254,20 +268,17 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 					pollfds[pollfd_index].revents = 0;
 					pollfd_index++;
 #else
-					ev.data.fd = context->sock;
+					ev.data.fd = node_context->sock;
 					ev.events = EPOLLIN;
-					context->events = EPOLLIN;
-					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, context->sock, &ev) == -1) {
-						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering bridge: %s", strerror(errno));
-						(void)close(db->epollfd);
-						db->epollfd = 0;
-						return MOSQ_ERR_UNKNOWN;
+					node_context->events = EPOLLIN;
+					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, node_context->sock, &ev) == -1) {
+						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering node: %s.", strerror(errno));
 					}	
 #endif
 				}
 				continue;
 			}
-			if(node_context->is_node && node_context->sock != INVALID_SOCKET && 
+			if(node_context->sock != INVALID_SOCKET && 
 				!node_context->node->handshaked && now >= node_context->node->check_handshake){
 				if(!node__check_connect(db, node_context)){
 #ifndef WITH_EPOLL
@@ -276,14 +287,11 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 					pollfds[pollfd_index].revents = 0;
 					pollfd_index++;
 #else
-					ev.data.fd = context->sock;
+					ev.data.fd = node_context->sock;
 					ev.events = EPOLLIN;
-					context->events = EPOLLIN;
-					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, context->sock, &ev) == -1) {
-						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering bridge: %s", strerror(errno));
-						(void)close(db->epollfd);
-						db->epollfd = 0;
-						return MOSQ_ERR_UNKNOWN;
+					node_context->events = EPOLLIN;
+					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, node_context->sock, &ev) == -1) {
+						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering node: %s.", strerror(errno));
 					}	
 #endif
 				}else{

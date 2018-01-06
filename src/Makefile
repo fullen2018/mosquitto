@@ -163,7 +163,7 @@ send_connack.o : send_connack.c mosquitto_broker_internal.h
 send_mosq.o : ../lib/send_mosq.c ../lib/send_mosq.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
-send_private.o : ../lib/send_private.c ../lib/send_mosq.h
+send_private.o : send_private.c ../lib/send_mosq.h
 	${CROSS_COMPILE}${CC} $(BROKER_CFLAGS) -c $< -o $@
 
 send_publish.o : ../lib/send_publish.c ../lib/send_mosq.h

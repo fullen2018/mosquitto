@@ -62,11 +62,11 @@ struct mosquitto *context__init(struct mosquitto_db *db, mosq_sock_t sock)
 	context->is_sys_topic = true;
 	context->is_db_dup_sub = true;
 	context->last_sub_id = 0;
-	context->client_topic_count = 0;
+	context->client_sub_count = 0;
 	context->remote_time_offset = 0;
 	context->last_sub_client_id = NULL;
 	context->db = db;
-	context->client_topics = NULL;
+	context->client_subs = NULL;
 
 	context->in_packet.payload = NULL;
 	packet__cleanup(&context->in_packet);
@@ -113,11 +113,11 @@ void context__cleanup(struct mosquitto_db *db, struct mosquitto *context, bool d
 {
 	struct mosquitto__packet *packet;
 	struct mosquitto_client_msg *msg, *next;
-	int i;
-
+	
 	if(!context) return;
 
 #ifdef WITH_BRIDGE
+	int i;
 	if(context->bridge){
 		for(i=0; i<db->bridge_count; i++){
 			if(db->bridges[i] == context){

@@ -116,13 +116,14 @@ int db__open(struct mosquitto__config *config, struct mosquitto_db *db)
 	db->bridge_count = 0;
 #endif
 #ifdef WITH_CLUSTER
-	db->node_contexts = NULL;
-	db->node_context_count= 0;
-	config->db = db;
+	db->enable_cluster_session = config->enable_cluster_session;
+	db->cluster_retain_delay = config->cluster_retain_delay;
 	db->sub_id = 0;
+	db->node_context_count= 0;
+	db->node_contexts = NULL;
+	db->db_subs = NULL;
 	db->retain_list = NULL;
-	db->nodes_disconn_times = 0;
-	db->current_nodes = 0;
+	config->db = db;
 #endif
 
 	// Initialize the hashtable
@@ -892,7 +893,9 @@ int db__message_write(struct mosquitto_db *db, struct mosquitto *context)
 			msg_state = tail->state;
 		switch(msg_state)
 #else
-		switch(tail->state){
+		switch(tail->state)
+#endif
+		{
 			case mosq_ms_publish_qos0:
 				rc = send__publish(context, mid, topic, payloadlen, payload, qos, retain, retries);
 				if(!rc){

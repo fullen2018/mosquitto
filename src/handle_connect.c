@@ -130,6 +130,10 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 	X509_NAME *name;
 	X509_NAME_ENTRY *name_entry;
 #endif
+#ifdef WITH_CLUSTER
+	int64_t remote_time, local_time;
+	char *time_str;
+#endif
 
 	G_CONNECTION_COUNT_INC();
 
@@ -155,7 +159,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		return 1;
 	}
 	if(!strcmp(protocol_name, PROTOCOL_NAME_v31)){
-		if((protocol_version&0x7F) != PROTOCOL_VERSION_v31){
+		if((protocol_version&PROTOCOL_MASK) != PROTOCOL_VERSION_v31){
 			if(db->config->connection_messages == true){
 				log__printf(NULL, MOSQ_LOG_INFO, "Invalid protocol version %d in CONNECT from %s.",
 						protocol_version, context->address);
@@ -166,7 +170,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		}
 		context->protocol = mosq_p_mqtt31;
 	}else if(!strcmp(protocol_name, PROTOCOL_NAME_v311)){
-		if((protocol_version&0x7F) != PROTOCOL_VERSION_v311){
+		if((protocol_version&PROTOCOL_MASK) != PROTOCOL_VERSION_v311){
 			if(db->config->connection_messages == true){
 				log__printf(NULL, MOSQ_LOG_INFO, "Invalid protocol version %d in CONNECT from %s.",
 						protocol_version, context->address);
@@ -372,10 +376,13 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 	if((protocol_version & MOSQ_NODE_MASK) == MOSQ_NODE_MEET){
 		context->is_node = false;
 		context->is_peer = true;
-		int64_t remote_time, local_time;
-		packet__read_int64(&context->in_packet, &remote_time);
+
+		packet__read_string(&context->in_packet, &time_str);
+		mosq_hexstr_to_time(&remote_time, time_str);
+		mosquitto__free(time_str);
 		local_time = mosquitto_time();
 		context->remote_time_offset = remote_time - local_time;
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] Receive CONNECT from peer: %s, remote_time:%ld, local_time:%ld, offset:%ld", context->id, remote_time, local_time, context->remote_time_offset);
 		for(i = 0; i<db->node_context_count; i++){
 			if(db->node_contexts[i] && 
 				!db->node_contexts[i]->node->handshaked && 
@@ -540,11 +547,10 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 			found_context->sub_count = 0;
 			context->last_mid = found_context->last_mid;
 #ifdef WITH_CLUSTER
-			context->client_topics = found_context->client_topics;
-			context->client_topic_count = found_context->client_topic_count;
+			context->client_subs = found_context->client_subs;
+			context->client_sub_count = found_context->client_sub_count;
 			found_context->save_subs = true;
 #endif
-
 			for(i=0; i<context->sub_count; i++){
 				if(context->subs[i]){
 					leaf = context->subs[i]->subs;
@@ -563,7 +569,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		do_disconnect(db, found_context);
 	}
 #ifdef WITH_CLUSTER
-	else if(!context->is_peer){
+	else if(!context->is_peer && db->enable_cluster_session){
 		struct mosquitto *node;
 		for(i = 0; i<db->node_context_count; i++){
 			node = db->node_contexts[i];
