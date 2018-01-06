@@ -64,7 +64,7 @@ int send__private_subscribe(struct mosquitto *context, int *mid, const char *top
 	/* 4. sub id */
 	packet__write_uint16(packet, sub_id);
 
-    log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private subscribe to node:%s (client_id:%s subid:%d, q%d, m%d, '%s')",
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Sending private subscribe to node:%s (client_id:%s subid:%d, q%d, m%d, '%s')",
 								      context->id, client_id, sub_id, topic_qos, local_mid, topic);
 
 	return packet__queue(context, packet);
