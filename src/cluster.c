@@ -202,34 +202,21 @@ int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
 	if(!context->is_node)
 		return MOSQ_ERR_INVAL;
 	struct mosquitto__node *node = context->node;
-	rc = net__socket_connect(context, node->address, node->port, NULL, false);
-	if(rc == 0){
-		context->state = mosq_cs_new;
-		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER INIT] Success in handshake with node: %s immediately.", node->name);
-		node->handshaked = true;
-		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
-		send__connect(context, context->keepalive, true);
-		context->next_pingreq = now;
-	}else if(rc < 0){
-		context->state = mosq_cs_connect_pending;
-		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Current cannot handshake with node: %s. reason:%s.", node->name, strerror(errno));
-		node->handshaked = false;
-		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
-	}else{
-		if(rc == MOSQ_ERR_TLS){
-			net__socket_close(db, context);
-			return rc;
-		}else if(rc == MOSQ_ERR_ERRNO){
-			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error connect with node: %s.", strerror(errno));
-		}else if(rc == MOSQ_ERR_EAI){
-			log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error connect with: %s.", gai_strerror(errno));
-		}
+
+	rc = net__try_connect(context, node->address, node->port, &context->sock, NULL, false);
+	if(rc > 0){
 		context->state = mosq_cs_disconnected;
 		assert(context->sock == INVALID_SOCKET);
 		node->handshaked = false;
 		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error in handshake with node: %s. reason:%s.", node->name, strerror(errno));
+		node->attemp_reconnect = now + MOSQ_ERR_INTERVAL;
+		return MOSQ_ERR_INVAL;
+	}else{
+		context->state = mosq_cs_connect_pending;
+		node->handshaked = false;
+		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
+		return MOSQ_ERR_SUCCESS;
 	}
-	return rc;
 }
 
 int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
@@ -241,10 +228,24 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 
 	rc = getsockopt(context->sock, SOL_SOCKET, SO_ERROR, &err, &errlen);
 	if(rc == 0 && err == 0){
+		rc = net__socket_connect_step3(context, node->address, node->port, NULL, false);
+		if(rc > 0){
+			if(rc == MOSQ_ERR_TLS){
+				net__socket_close(db, context);
+				return rc;
+			}else if(rc == MOSQ_ERR_ERRNO){
+				log__printf(NULL, MOSQ_LOG_ERR, "Error connect with node: %s.", strerror(errno));
+			}else if(rc == MOSQ_ERR_EAI){
+				log__printf(NULL, MOSQ_LOG_ERR, "Error connect with node: %s.", gai_strerror(errno));
+			}
+			node->attemp_reconnect = now + MOSQ_ERR_INTERVAL;
+			return rc;
+		}
 		context->state = mosq_cs_new;
 		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER INIT] Finally handshake with node: %s success.", node->name);
 		node->handshaked = true;
 		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
+
 		send__connect(context, context->keepalive, true);
 		context->next_pingreq = now;
 		node->connrefused_interval = 2;
