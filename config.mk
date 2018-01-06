@@ -35,7 +35,7 @@ WITH_THREADING:=yes
 # to connect to other brokers and subscribe/publish to topics. You probably
 # want to leave this included unless you want to save a very small amount of
 # memory size and CPU time.
-#WITH_BRIDGE:=yes
+WITH_BRIDGE:=yes
 
 # Comment out to remove cluster support for the broker. This allow the broker
 # to connect to other brokers and subscribe/publish to topics. You probably
