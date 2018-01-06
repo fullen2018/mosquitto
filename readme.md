@@ -38,9 +38,9 @@ SESSION RESP<br>
 For cluster session, SESSION REQ would be broadcast for each client connect, and if
 clean session set to false, remote cluster would return this client's session include
 subscription, incomplete publishes with QoS>0 inside SESSION RESP.
-<br>
+<br><br>
 For retain message, PRIVATE SUBSCRIBE would be broadcast for each client subscription that
 is fresh for local broker, and if there exists a retain message, remote broker would
 return the retain message inside PRIVATE RETAIN.
-<br>
+<br><br>
 The cluster current also support node/subscription recover, crash detection.
