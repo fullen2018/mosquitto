@@ -289,7 +289,7 @@ void node__packet_cleanup(struct mosquitto *context)
 		mosquitto__free(context->current_out_packet);
 		context->current_out_packet = NULL;
 	}
-    while(context->out_packet){
+	while(context->out_packet){
 		packet__cleanup(context->out_packet);
 		packet = context->out_packet;
 		context->out_packet = context->out_packet->next;
@@ -308,7 +308,7 @@ int mosquitto_handle_retain(struct mosquitto_db *db)
 
 	now = mosquitto_time();
 	cr = db->retain_list;
-    while(cr && (now >= cr->expect_send_time)){
+	while(cr && (now >= cr->expect_send_time)){
 		if(cr == db->retain_list){
 			db->retain_list = db->retain_list->next;
 		}else if(cr == db->retain_list->next){
