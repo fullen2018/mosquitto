@@ -53,13 +53,13 @@ int send__private_subscribe(struct mosquitto *context, int *mid, const char *top
 	local_mid = mosquitto__mid_generate(context);
 	if(mid)
 		*mid = (int)local_mid;
-    /* 0. mid */
+	/* 0. mid */
 	packet__write_uint16(packet, local_mid);
 	/* 1. topic */
 	packet__write_string(packet, topic, strlen(topic));
-    /* 2. QoS */
+	/* 2. QoS */
 	packet__write_byte(packet, topic_qos);
-    /* 3. original client id */
+	/* 3. original client id */
 	packet__write_string(packet, client_id, strlen(client_id));
 	/* 4. sub id */
 	packet__write_uint16(packet, sub_id);
