@@ -8,7 +8,7 @@ to make the system with a high availability.
 ## Usage
 
 Install mosquitto on all of the nodes and write the addresses into mosquitto.conf,<br>
-e.g.<br>
+e.g.,<br>
 node_name node1<br>
 node_address 192.168.1.1:1883<br>
 <br>
@@ -29,7 +29,7 @@ various platforms.
 Broadcast clients' subscription/unsubscription to each other brokers inside the cluster.<br>
 
 Some private messages was introduced in order to support cluster session and retain message.<br>
-i.e.<br>
+i.e.,<br>
 PRIVATE SUBSCRIBE<br>
 PRIVATE RETAIN<br>
 SESSION REQ<br>
