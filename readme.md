@@ -50,5 +50,5 @@ return the retain message inside PRIVATE RETAIN. Client will receive the most re
 For QoS, all the publishes set with it's original QoS inside the cluster, and process with QoS=0, to saves the inside traffic. The actual QoS send to client decide by the broker which client connected with.<br>
 ### Other features
 All validation, utf-8, ACL checking has disabled for the messages inside the cluster, in order to improve cluster efficiency.<br><br>
-Once CONNECT success with other broker, local broker will send all the local clients' subscription to remote broker, to avoid subscription loss while some brokers down and up.<br>
+Once CONNECT success with other broker, local broker will send all the local clients' subscription to remote broker, to avoid subscription loss while some brokers down and up.<br><br>
 The cluster current also support node/subscription recover, crash detection.
