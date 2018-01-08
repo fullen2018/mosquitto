@@ -389,7 +389,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 				db->node_contexts[i]->sock == INVALID_SOCKET && 
 				!strcmp(db->node_contexts[i]->node->address, context->address)){
 				log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] node:%s current disconnected, trigger CONNECT immediately.",
-															context->id, db->node_contexts[i]->id);
+															db->node_contexts[i]->id);
 				db->node_contexts[i]->node->attemp_reconnect = mosquitto_time();
 				break;
 			}
