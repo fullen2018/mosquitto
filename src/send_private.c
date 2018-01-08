@@ -247,7 +247,7 @@ int send__session_resp(struct mosquitto *context, char *client_id, struct mosqui
 			packet__write_string(packet, client_sub->sub_tbl->topic, strlen(client_sub->sub_tbl->topic));
 			packet__write_byte(packet, client_sub->sub_qos);
 
-			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER]\tSUBs: topic:%s(%ld bytes) qos:%d(out)",
+			log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER]\tSUBs: topic:%s(%zd bytes) qos:%d(out)",
 										  client_sub->sub_tbl->topic, strlen(client_sub->sub_tbl->topic), client_sub->sub_qos);
 		}
 	}

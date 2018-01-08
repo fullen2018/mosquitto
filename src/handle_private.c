@@ -258,16 +258,16 @@ int handle__session_req(struct mosquitto_db *db, struct mosquitto *context)
 
 	HASH_FIND(hh_id,db->contexts_by_id, client_id, strlen(client_id), client_context);
 	if(!client_context){
-		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Receive SESSION REQ from peer: %s, client_id:%s(%ld bytes) not found in local db.", context->id, client_id,strlen(client_id));
+		log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Receive SESSION REQ from peer: %s, client_id:%s not found in local db.", context->id, client_id);
 		mosquitto__free(client_id);
 
 		return MOSQ_ERR_SUCCESS;
 	}
-	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Receive SESSION REQ from peer: %s, client_id:%s(%ld bytes) has found in local db", context->id, client_id,strlen(client_id));
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Receive SESSION REQ from peer: %s, client_id:%s has found in local db", context->id, client_id);
 	if(!clean_session)
 		rc = send__session_resp(context, client_id, client_context);
 
-	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Client %s(%ld bytes) has been connected to remote peer, closing old connection.", client_id,strlen(client_id));
+	log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Client %s has been connected to remote peer, closing old connection.", client_id);
 	mosquitto__free(client_id);
 	client_context->clean_session = true;
 	client_context->save_subs = false;

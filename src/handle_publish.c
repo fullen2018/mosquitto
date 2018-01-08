@@ -185,11 +185,10 @@ int handle__publish(struct mosquitto_db *db, struct mosquitto *context)
 		return rc;
 	}
 #ifdef WITH_CLUSTER
-	time_t now = mosquitto_time();
 	if(context->is_node)
-	  log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received PUBLISH from node: %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->node->name, dup, qos, retain, mid, topic, (long)payloadlen);
+	  log__printf(NULL, MOSQ_LOG_DEBUG, "[CLUSTER] Received PUBLISH from node: %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes)).", context->node->name, dup, qos, retain, mid, topic, (long)payloadlen);
 	else
-	  log__printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes)) at %ld", context->id, dup, qos, retain, mid, topic, (long)payloadlen,(int64_t)now);
+	  log__printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes)).", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
 #else
 	log__printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
 #endif

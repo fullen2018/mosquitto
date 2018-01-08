@@ -382,7 +382,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		mosquitto__free(time_str);
 		local_time = mosquitto_time();
 		context->remote_time_offset = remote_time - local_time;
-		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] Receive CONNECT from peer: %s, remote_time:%ld, local_time:%ld, offset:%ld", context->id, remote_time, local_time, context->remote_time_offset);
+		log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] Receive CONNECT from peer: %s, remote_time:%d, local_time:%d, offset:%d", context->id, (int)remote_time, (int)local_time, (int)context->remote_time_offset);
 		for(i = 0; i<db->node_context_count; i++){
 			if(db->node_contexts[i] && 
 				!db->node_contexts[i]->node->handshaked && 
