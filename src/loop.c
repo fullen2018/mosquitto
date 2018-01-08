@@ -263,14 +263,28 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 			}
 			if(now >= node_context->node->attemp_reconnect &&
 				!node_context->node->handshaked && node_context->sock == INVALID_SOCKET){
-				node__try_connect(db, node_context);
-			}
-			if(node_context->sock != INVALID_SOCKET && 
-				!node_context->node->handshaked && now >= node_context->node->check_handshake){
-				if(!node__check_connect(db, node_context)){
+				if(!node__try_connect(db, node_context, now)){
 #ifndef WITH_EPOLL
 					pollfds[pollfd_index].fd = listensock[i];
 					pollfds[pollfd_index].events = POLLIN;
+					pollfds[pollfd_index].revents = 0;
+					pollfd_index++;
+#else
+					ev.data.fd = node_context->sock;
+					ev.events = EPOLLIN;
+					node_context->events = EPOLLIN|EPOLLOUT;
+					if(epoll_ctl(db->epollfd, EPOLL_CTL_ADD, node_context->sock, &ev) == -1) {
+						log__printf(NULL, MOSQ_LOG_ERR, "Error in epoll initial registering node: %s.", strerror(errno));
+					}	
+#endif
+				}
+			}
+			if(node_context->sock != INVALID_SOCKET && 
+				!node_context->node->handshaked && now >= node_context->node->check_handshake){
+				if(!node__check_connect(db, node_context, now)){
+#ifndef WITH_EPOLL
+					pollfds[pollfd_index].fd = listensock[i];
+					pollfds[pollfd_index].events = POLLIN|EPOLLOUT;
 					pollfds[pollfd_index].revents = 0;
 					pollfd_index++;
 #else

@@ -390,7 +390,7 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 				!strcmp(db->node_contexts[i]->node->address, context->address)){
 				log__printf(NULL, MOSQ_LOG_INFO, "[CLUSTER] node:%s current disconnected, trigger CONNECT immediately.",
 															db->node_contexts[i]->id);
-				db->node_contexts[i]->node->attemp_reconnect = mosquitto_time();
+				db->node_contexts[i]->node->attemp_reconnect = local_time;
 				break;
 			}
 		}

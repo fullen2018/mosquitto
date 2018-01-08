@@ -195,10 +195,9 @@ void node__cleanup(struct mosquitto_db *db, struct mosquitto *context)
 	context->node->remote_password = NULL;
 }
 
-int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
+int node__try_connect(struct mosquitto_db *db, struct mosquitto *context, time_t now)
 {
 	int rc;
-	time_t now = mosquitto_time();
 	if(!context->is_node)
 		return MOSQ_ERR_INVAL;
 	struct mosquitto__node *node = context->node;
@@ -211,18 +210,27 @@ int node__try_connect(struct mosquitto_db *db, struct mosquitto *context)
 		log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] Error in handshake with node: %s. reason:%s.", node->name, strerror(errno));
 		node->attemp_reconnect = now + MOSQ_ERR_INTERVAL;
 		return MOSQ_ERR_INVAL;
+	}else if(rc == 0){
+		log__printf(NULL, MOSQ_LOG_INFO, "[HANDSHAKE] Success in handshake with node: %s.", node->name);
+		context->state = mosq_cs_new;
+		node->handshaked = true;
+		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
+		send__connect(context, context->keepalive, false);
+		context->next_pingreq = now;
+		node->connrefused_interval = 2;
+		node->hostunreach_interval = 2;
+		return MOSQ_ERR_SUCCESS;
 	}else{
 		context->state = mosq_cs_connect_pending;
 		node->handshaked = false;
 		node->check_handshake = now + MOSQ_CHECKCONN_INTERVAL;
-		return MOSQ_ERR_SUCCESS;
+		return MOSQ_ERR_CONN_PENDING;
 	}
 }
 
-int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
+int node__check_connect(struct mosquitto_db *db, struct mosquitto *context, time_t now)
 {
 	int err, rc, reconnect_interval;
-	time_t now = mosquitto_time();
 	struct mosquitto__node *node = context->node;
 	socklen_t errlen = sizeof(err);
 
@@ -260,7 +268,6 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 			case EINPROGRESS:
 				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] node %s is busy, will reconnect later after %d seconds..", node->name, MOSQ_EINPROGRESS_INTERVAL);
 				node->attemp_reconnect = now + MOSQ_EINPROGRESS_INTERVAL;
-				context->state = mosq_cs_connect_pending;
 				return MOSQ_ERR_CONN_PENDING;
 			case EHOSTUNREACH:
 				log__printf(NULL, MOSQ_LOG_ERR, "[CLUSTER INIT] node %s OS maybe down or network unavailable, will reconnect later after %d seconds..", node->name, node->hostunreach_interval);
