@@ -46,7 +46,7 @@ void node__disconnect(struct mosquitto_db *db, struct mosquitto *context)
 {
 	if(!context->is_node)
 		return;
-	assert(context->clean_session == true);
+	assert(context->clean_session == false);
 	context->node->attemp_reconnect = mosquitto_time() + MOSQ_ERR_INTERVAL;
 	context->node->handshaked = false;
 	context->node->connrefused_interval = 2;
@@ -84,7 +84,7 @@ int node__new(struct mosquitto_db *db, struct mosquitto__node *node)
 		new_context->sock = INVALID_SOCKET;
 		new_context->last_msg_in = 0;
 		new_context->next_msg_out = mosquitto_time() + MOSQ_CLUSTER_KEEPALIVE;
-		new_context->clean_session = true;
+		new_context->clean_session = false;
 		new_context->disconnect_t = 0;
 		new_context->id = NULL;
 		new_context->last_mid = 0;
@@ -246,7 +246,7 @@ int node__check_connect(struct mosquitto_db *db, struct mosquitto *context)
 		node->handshaked = true;
 		HASH_ADD(hh_sock, db->contexts_by_sock, sock, sizeof(context->sock), context);
 
-		send__connect(context, context->keepalive, true);
+		send__connect(context, context->keepalive, false);
 		context->next_pingreq = now;
 		node->connrefused_interval = 2;
 		node->hostunreach_interval = 2;
@@ -310,12 +310,10 @@ void node__packet_cleanup(struct mosquitto *context)
 	packet__cleanup(&(context->in_packet));
 }
 
-int mosquitto_handle_retain(struct mosquitto_db *db)
+int mosquitto_handle_retain(struct mosquitto_db *db, time_t now)
 {
-	time_t now;
 	struct mosquitto_client_retain *cr = NULL, *prev_cr = NULL, *tmp_cr = NULL;
 
-	now = mosquitto_time();
 	cr = db->retain_list;
 	while(cr && (now >= cr->expect_send_time)){
 		if(cr == db->retain_list){

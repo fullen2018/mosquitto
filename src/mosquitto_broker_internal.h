@@ -740,7 +740,7 @@ void node__cleanup(struct mosquitto_db *db, struct mosquitto *context);
 void node__packet_cleanup(struct mosquitto *context);
 int node__try_connect(struct mosquitto_db *db, struct mosquitto *context);
 int node__check_connect(struct mosquitto_db *db, struct mosquitto *context);
-int mosquitto_handle_retain(struct mosquitto_db *db);
+int mosquitto_handle_retain(struct mosquitto_db *db, time_t now);
 int mosquitto_cluster_init(struct mosquitto_db *db, struct mosquitto *context);
 int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub, uint8_t qos);
 int mosquitto_cluster_unsubscribe(struct mosquitto_db *db, struct mosquitto *context, char *sub);

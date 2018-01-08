@@ -228,14 +228,16 @@ int mosquitto_main_loop(struct mosquitto_db *db, mosq_sock_t *listensock, int li
 #endif
 
 #ifdef WITH_CLUSTER
-		mosquitto_handle_retain(db);
+		now = mosquitto_time();
+
+		mosquitto_handle_retain(db ,now);
 
 		for(i=0; i<db->config->node_count; i++){
 			node = &(db->config->nodes[i]);
 			if(!node->context)
 				node__new(db, node);
 		}
-		
+
 		for(i=0; i<db->node_context_count; i++){
 			node_context = db->node_contexts[i];
 			if(!node_context)
@@ -662,8 +664,10 @@ void do_disconnect(struct mosquitto_db *db, struct mosquitto *context)
 #ifdef WITH_CLUSTER
 	if(context->is_node)
 		node__disconnect(db, context);
-	if(!context->is_node && !context->save_subs && context->clean_session)
+	if(!context->is_node && !context->is_peer && !context->save_subs && context->clean_session)
 		mosquitto_cluster_client_disconnect(db, context);
+	if(context->is_peer)
+		sub__clean_session(db, context);
 #endif
 #ifdef WITH_WEBSOCKETS
 	if(context->wsi){
