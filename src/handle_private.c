@@ -363,6 +363,7 @@ int handle__session_resp(struct mosquitto_db *db, struct mosquitto *context)
 				cr->retain_msgs = NULL;
 				cr->expect_send_time = mosquitto_time() + db->cluster_retain_delay;
 				cr->sub_id = ++db->sub_id;
+				cr->qos = sub_qos;
 				client_context->last_sub_id = cr->sub_id;
 				/* add a client retain msg list into db */
 				if(!db->retain_list){

@@ -24,6 +24,7 @@ Contributors:
 #include "send_mosq.h"
 #include "sys_tree.h"
 #include "time_mosq.h"
+#include "util_mosq.h"
 
 static int max_inflight = 20;
 static unsigned long max_inflight_bytes = 0;
@@ -1133,6 +1134,7 @@ int db__message_insert_to_inflight(struct mosquitto_db *db, struct mosquitto *cl
 	if(msg->qos > 0){
 		client->msg_count12++;
 		client->msg_bytes12 += msg->store->payloadlen;
+		msg->mid = mosquitto__mid_generate(client);
 	}
 
 #ifdef WITH_WEBSOCKETS

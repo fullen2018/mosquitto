@@ -326,6 +326,8 @@ int mosquitto_handle_retain(struct mosquitto_db *db, time_t now)
 		if(prev_cr)
 			prev_cr->next = cr;
 		while(tmp_cr->retain_msgs){
+			if(tmp_cr->retain_msgs->qos > tmp_cr->qos)
+				tmp_cr->retain_msgs->qos = tmp_cr->qos;
 			db__message_insert_to_inflight(db, tmp_cr->client, tmp_cr->retain_msgs);
 			tmp_cr->retain_msgs = tmp_cr->retain_msgs->next;
 		}
@@ -449,6 +451,7 @@ int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *conte
 		cr = mosquitto__calloc(1, sizeof(struct mosquitto_client_retain));
 		cr->client = context;
 		cr->next = NULL;
+		cr->qos = qos;
 		cr->retain_msgs = NULL;
 		cr->expect_send_time = mosquitto_time() + db->cluster_retain_delay;
 		cr->sub_id = ++db->sub_id;

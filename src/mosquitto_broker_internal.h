@@ -432,6 +432,7 @@ enum mosquitto_cluster_private_msg_type{
 };
 
 struct mosquitto_client_retain{
+	uint8_t qos;
 	uint16_t sub_id;
 	time_t expect_send_time;
 	struct mosquitto *client;

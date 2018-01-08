@@ -681,7 +681,7 @@ static int retain__process(struct mosquitto_db *db, struct mosquitto_msg_store *
 	if(context->is_peer)
 		return send__private_retain(context, context->last_sub_client_id, context->last_sub_id, retained->topic, retained->qos, retained->mid, (int64_t)retained->rcv_time, retained->payloadlen, UHPA_ACCESS_PAYLOAD(retained));
 	else if(!context->is_sys_topic && !context->is_db_dup_sub)
-		return db__message_insert_into_retain_queue(db, context, mid, mosq_md_out, qos, true, retained, context->last_sub_id);
+		return db__message_insert_into_retain_queue(db, context, mid, mosq_md_out, retained->qos, true, retained, context->last_sub_id);
 	else /* duplicate db sub */
 		return db__message_insert(db, context, mid, mosq_md_out, qos, true, retained);
 #else
