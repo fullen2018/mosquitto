@@ -573,7 +573,8 @@ int handle__connect(struct mosquitto_db *db, struct mosquitto *context)
 		struct mosquitto *node;
 		for(i = 0; i<db->node_context_count; i++){
 			node = db->node_contexts[i];
-			send__session_req(node, client_id, clean_session);
+			if(node && node->is_node && !node->is_peer && node->state == mosq_cs_connected && node->sock != INVALID_SOCKET)
+				send__session_req(node, client_id, clean_session);
 		}
 	}
 #endif
