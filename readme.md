@@ -60,8 +60,22 @@ Provide continuous service under single point of failure.<br>
 Take on the role of one logical MQTT broker for millions of MQTT clients.<br>
 
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/1.jpg)
-####                   Pic1. Mosquitto Cluster Overview<br>
+####			Pic1. Mosquitto Cluster Overview<br>
+While receive client subscriptin: Notification other brokers that the topic has been subscribed by me,<br>
+While receive client publish: route the message to the correct brokers which subscribed this topic.<br>
+
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/2.jpg)
-####                   Pic2. Mosquitto Cluster Private Messages<br>
+####			Pic2. Mosquitto Cluster Private Messages<br>
+There's only one logic channel between 2 brokers, in order to reuse this channel for multi clients, 
+some private messages has been introduced, include client id, subscription id, raw timestamp and etc., 
+which help the broker to make a correct route decision.<br>
+
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/3.jpg)
-####                   Pic3. Mosquitto Cluster Internal Message Flow<br>
+####			Pic3. Mosquitto Cluster Internal Message Flow<br>
+Forwarding rules:<br>
+Forward local client subscriptions to the broker which is a fresh guy for the cluster or just recovered from a fault.<br>
+DO NOT forward internal messages to any broker.<br>
+Only broadcast local fresh subscription to other brokers.<br>
+Broadcast unsubscription until a topic is no longer subscribed by any local client.<br>
+Session messages broadcasting can be disable by configuration.<br>
+DO NOT forward PUB/SUBs under $SYS.
