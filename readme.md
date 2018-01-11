@@ -51,8 +51,14 @@ For QoS, all the publishes set with it's original QoS inside the cluster, and pr
 ### Other features
 All validation, utf-8, ACL checking has disabled for the messages inside the cluster, in order to improve cluster efficiency.<br><br>
 Once CONNECT success with other broker, local broker will send all the local clients' subscription to remote broker, to avoid subscription loss while some brokers down and up.<br><br>
-The cluster current also support node/subscription recover, crash detection.
-## Design philosophy
+The cluster current also support node/subscription recover, crash detection.<br>
+## Design Philosophy
+### Mosquitto cluster goals
+Mosquitto cluster is a distributed implementation of Mosquitto brokers with following goals:<br>
+Scalable in a horizontal fashion, which means you can add any number of MQTT brokers at runtime.<br>
+Provide continuous service under single point of failure.<br>
+Take on the role of one logical MQTT broker for millions of MQTT clients.<br>
+
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/1.jpg)
 ####                   Pic1. Mosquitto Cluster Overview<br>
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/2.jpg)
