@@ -434,6 +434,7 @@ int mosquitto_cluster_subscribe(struct mosquitto_db *db, struct mosquitto *conte
 
 	for(i=0; i<context->client_sub_count && !is_client_dup_sub; i++){
 		if(!context->client_subs[i]){
+			context->client_subs[i] = mosquitto__malloc(sizeof(struct client_sub_table));
 			context->client_subs[i]->sub_tbl = sub_tbl;
 			context->client_subs[i]->sub_qos = qos;
 			break;
