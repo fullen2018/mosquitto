@@ -2215,6 +2215,7 @@ static int config__check(struct mosquitto__config *config)
 	int i, j;
 	struct mosquitto__node *node1, *node2, *new_nodes, *tmp_node;
 	char hostname[256];
+	pid_t pid;
 	int len;
 
 	struct ifaddrs *itfs = NULL;
@@ -2270,7 +2271,12 @@ static int config__check(struct mosquitto__config *config)
 		node1 = &config->nodes[i];
 		if(!node1) continue;
 		if(!node1->remote_clientid){
+			memset(hostname, 0, 256);
 			if(!gethostname(hostname, 256)){
+				pid = getpid();
+				len = strlen(hostname);
+				sprintf(hostname+len,"_%d",pid);
+				hostname[255] = '\0';
 				len = strlen(hostname) + 1;
 				node1->remote_clientid = mosquitto__malloc(len);
 				if(!node1->remote_clientid)
