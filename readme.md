@@ -2,8 +2,8 @@ Mosquitto with cluster
 =================
 
 In a mosquitto cluster, clients can subscribe to every node, and can also publish to every other node. The cluster will make sure that published messages are forwarded as needed.<br>
-The cluster is full non-centralized, autonomy system without any leader or key node, to make the system with a high availablity.
-E.g., each node has a fault rate with 1%, then a non-centralized cluster with N nodes has a service availability which is 1-1%^N.<br>
+The cluster is full decentralized, autonomy system without any leader or key node, to make the system with a high availablity.
+E.g., each node has a fault rate with 1%, then a decentralized cluster with N nodes has a service availability which is 1-1%^N.<br>
 
 ## Usage
 
