@@ -55,7 +55,7 @@ The cluster current also support node/subscription recover, crash detection.<br>
 ## Design Philosophy
 ### Mosquitto cluster goals
 Mosquitto cluster is a distributed implementation of Mosquitto brokers with following goals:<br>
-Scalable in a horizontal fashion, which means you can add any number of MQTT brokers at runtime.<br>
+Scalable in a horizontal fashion, which means you can expand cluster capability by increase number of brokers.<br>
 Provide continuous service under single point of failure.<br>
 Take on the role of one logical MQTT broker for millions of MQTT clients.<br>
 
