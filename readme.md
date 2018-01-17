@@ -85,6 +85,7 @@ Using [krylovsk/mqtt-benchmark](https://github.com/krylovsk/mqtt-benchmark) as t
 ![image](https://github.com/hui6075/mosquitto/blob/develop/img/cluster_throughput.jpg)
 ####			Pic4. Mean bandwidth of Mosquitto cluster<br>
 n=10k means 10000 messages to send per client, c=100 means 100 clients to start.<br>
+MsgSize=1000bytes, QoS=2.<br>
 
 A more detailed test report is available under:
 https://github.com/hui6075/mosquitto/tree/develop/benchmark
