@@ -79,3 +79,12 @@ Only broadcast local fresh subscription to other brokers.<br>
 Broadcast unsubscription until a topic is no longer subscribed by any local client.<br>
 Session messages broadcasting can be disable by configuration.<br>
 DO NOT forward PUB/SUBs under $SYS.
+
+## Benchmark
+Using [krylovsk/mqtt-benchmark](https://github.com/krylovsk/mqtt-benchmark) as the benchmark tool to give a simply testing for the cluster. The bandwidth stop increase with 3 or more brokers due to client machine's bottleneck.<br>
+![image](https://github.com/hui6075/mosquitto/blob/develop/img/cluster_throughput.jpg)
+####			Pic4. Mean bandwidth of Mosquitto cluster<br>
+n=10k means 10000 messages to send per client, c=100 means 100 clients to start.<br>
+
+A more detailed test report is available under:
+https://github.com/hui6075/mosquitto/tree/develop/benchmark
