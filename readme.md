@@ -41,7 +41,7 @@ Fix header|ClientID|Clean Session<br><br>
 SESSION RESP<br>
 Fix header|ClientID|PacketID|NRsubs|sub1(topic|qos)|...|subN|NRpubs|pub1(topic|state|dir|dup|qos|mid|payload)|...|pubN|<br>
 ### Cluster session support
-For cluster session, SESSION REQ would be broadcast for each client CONNECT which has no previous context found in local broker, remote broker which has this client's context will kick-off this client and if clean session set to false, the remote broker would return this client's session include subscription, incomplete publishes with QoS>0 inside SESSION RESP. This feature could be disable in mosquitto.conf, in order to save inside traffic.<br>
+For cluster session, SESSION REQ would be broadcast for each client CONNECT which has no previous context found in local broker, remote broker which has this client's context will kick-off this client and if clean session set to false, the remote broker would return this client's session include subscription, incomplete publishes with QoS=0/1 inside SESSION RESP. This feature could be disable in mosquitto.conf, in order to endure instantaneous large number of concurrent connections at system startup phase.<br>
 ### Cluster retain message support
 For retain message, PRIVATE SUBSCRIBE would be broadcast for each client subscription that
 is fresh for local broker, and if there exists a retain message, remote broker would
